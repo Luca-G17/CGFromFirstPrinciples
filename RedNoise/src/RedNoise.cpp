@@ -5,9 +5,32 @@
 #include <vector>
 #include <algorithm>
 #include <glm/glm.hpp>
+#include <cmath>
+#include <Colour.h>
 
 #define WIDTH 320
 #define HEIGHT 240
+
+struct Line2D {
+	std::vector<glm::vec2> points;
+	Colour colour;
+	Line2D()
+} Line2D;
+
+Line2D Line2D(glm::vec2 from, glm::vec2 to, Colour c) {
+	float xdiff = to.x - from.x;
+	float ydiff = to.y - from.y;
+	float steps = fmax(fabs(xdiff), fabs(ydiff));
+	float xstep = xdiff / steps;
+	float ystep = ydiff / steps;
+	std::vector<glm::vec2> ps;
+	for (float i = 0.0; i < steps; i++) {
+		float x = from.x + xstep * i;
+		float y = from.y + ystep * i;
+		ps.push_back(glm::vec2(x, y));
+	}
+	return Line2D(ps, c);
+}
 
 std::vector<float> interpolateSingleFloats(float from, float to, int steps) {
 	float step = (to - from) / (steps - 1); 
@@ -84,11 +107,35 @@ void TwoDGradient(DrawingWindow &window) {
 	}
 }
 
+void drawPoints(DrawingWindow &window, std::vector<glm::vec2> points, int colour) {
+	for (glm::vec2 p : points) {
+		window.setPixelColour(p.x, p.y, colour);
+	}
+}
+
+void DrawLine(DrawingWindow &window, Line2D line) {
+	int col = PackColour(line.colour.red, line.colour.green, line.colour.blue);
+	for (glm::vec2 p : line.points) {
+		window.setPixelColour(p.x, p.y, col);
+	}
+} 
+
+void witchSymbol(DrawingWindow &window) {
+	float midX = WIDTH / 2;
+	float midY = HEIGHT / 2;
+	Colour white(255, 255, 255);
+	DrawLine(window, Line2D(glm::vec2(0, 0), glm::vec2(midX, midY), white));
+	DrawLine(window, Line2D(glm::vec2(WIDTH - 1, 0), glm::vec2(midX, midY), white));
+	DrawLine(window, Line2D(glm::vec2(midX, 0), glm::vec2(midX, HEIGHT), white));
+	DrawLine(window, Line2D(glm::vec2(midX - WIDTH / 6, midY), glm::vec2(midX + WIDTH / 6, midY), white));
+}
+
 void draw(DrawingWindow &window) {
 	window.clearPixels();
 	// RedNoise(window);
 	// GrayscaleGradient(window);
-	TwoDGradient(window);
+	// TwoDGradient(window);
+	witchSymbol(window);
 }
 
 void handleEvent(SDL_Event event, DrawingWindow &window) {
@@ -104,8 +151,6 @@ void handleEvent(SDL_Event event, DrawingWindow &window) {
 }
 
 int main(int argc, char *argv[]) {
-	interpolateSingleFloatsTest();
-	interpolateThreeElementsTest();
 	DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
 	SDL_Event event;
 	while (true) {
