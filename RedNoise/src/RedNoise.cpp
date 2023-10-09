@@ -52,7 +52,7 @@ Shape2D CreateStrokedTriangle2D(CanvasTriangle verticies, Colour c) {
 	return { ps, c };
 }
 
-Shape2D FillFlatBottomTriangle(CanvasPoint v0, CanvasPoint v1, CanvasPoint v2, Colour c) {
+Shape2D FillFlatToppedTriangle(CanvasPoint v0, CanvasPoint v1, CanvasPoint v2, Colour c) {
 	float slope1 = (v1.x - v0.x) / (v1.y - v0.y);
 	float slope2 = (v2.x - v0.x) / (v2.y - v0.y);
 	float x1 = v0.x;
@@ -67,7 +67,8 @@ Shape2D FillFlatBottomTriangle(CanvasPoint v0, CanvasPoint v1, CanvasPoint v2, C
 	return { ps, c };
 }
 
-Shape2D FillFlatToppedTriangle(CanvasPoint v0, CanvasPoint v1, CanvasPoint v2, Colour c) {
+Shape2D FillFlatBottomTriangle(CanvasPoint v0, CanvasPoint v1, CanvasPoint v2, Colour c) {
+	// v2 is the highest point
 	float slope1 = (v2.x - v0.x) / (v2.y - v0.y);
 	float slope2 = (v2.x - v1.x) / (v2.y - v1.y);
 	float x1 = v2.x;
@@ -101,8 +102,8 @@ std::pair<Shape2D, Shape2D> CreateFilledTriangle2D(CanvasTriangle verticies, Col
 	else {
 		float v3x = v0.x + ((v1.y - v0.y) / (v2.y - v0.y)) * (v2.x - v0.x);
 		CanvasPoint v3 = CanvasPoint(v3x, v1.y);
-		Shape2D bottom = FillFlatBottomTriangle(v0, v1, v3, c);
-		Shape2D top = FillFlatToppedTriangle(v1, v3, v2, c);
+		Shape2D bottom = FillFlatBottomTriangle(v1, v3, v2, c);
+		Shape2D top = FillFlatToppedTriangle(v0, v1, v3, c);
 		ps.insert(ps.begin(), bottom.points.begin(), bottom.points.end());
 		ps.insert(ps.begin(), top.points.begin(), top.points.end());
 	}
@@ -123,13 +124,13 @@ std::vector<glm::vec2> InterpolateTwoElementValues(glm::vec2 from, glm::vec2 to,
 	glm::vec2 dir = (to - from) * (1.0f / (steps - 1));
 	std::vector<glm::vec2> results;
 	for (int i = 0; i < steps; i++) {
-		results.push_back(from + (dir + static_cast<float>(i)));
+		results.push_back(from + (dir * static_cast<float>(i)));
 	}
 	return results;
 }
 
-Shape2D TexturedFlatBottomTriangle2D(CanvasPoint v0, CanvasPoint v1, CanvasPoint v2, CanvasPoint tv0, CanvasPoint tv1, CanvasPoint tv2) {
-	// Assume v2 at the top
+Shape2D TexturedFlatToppedTriangle2D(CanvasPoint v0, CanvasPoint v1, CanvasPoint v2, CanvasPoint tv0, CanvasPoint tv1, CanvasPoint tv2) {
+	// Assume v0 at the bottom
 	float slope1 = (v1.x - v0.x) / (v1.y - v0.y);
 	float slope2 = (v2.x - v0.x) / (v2.y - v0.y);
 	float x1 = v0.x;
@@ -141,18 +142,100 @@ Shape2D TexturedFlatBottomTriangle2D(CanvasPoint v0, CanvasPoint v1, CanvasPoint
 
 	glm::vec2 diff2 = CanvasPointToVec2(v2) - CanvasPointToVec2(v0);
 	float steps2 = fmax(fabs(diff2.x), fabs(diff2.y));
+	float steps = fmax(steps1, steps2);
+	std::vector<glm::vec2> tl1 = InterpolateTwoElementValues(CanvasPointToVec2(tv0), CanvasPointToVec2(tv1), steps);
+	std::vector<glm::vec2> tl2 = InterpolateTwoElementValues(CanvasPointToVec2(tv0), CanvasPointToVec2(tv2), steps);
+	for (int s = 0; s < steps; s++) {
+		int y = v0.y - s;
+		Shape2D l = CreateLine2D(CanvasPoint(x1, y), CanvasPoint(x2, y), Colour());
+		x1 -= slope1;
+		x2 -= slope2;
+		if (y <= v1.y) {
+			printf("LIGMABALLS");
+		}
+		std::vector<glm::vec2> textureScanline = InterpolateTwoElementValues(tl1[s], tl2[s], l.points.size());
+		for (int i = 0; i < l.points.size(); i++) {
+			l.points[i].texturePoint = TexturePoint(textureScanline[i].x, textureScanline[i].y);
+		}
+		ps.insert(ps.begin(), l.points.begin(), l.points.end());
+	}
+	return { ps, Colour() };
+}
 
-	std::vector<glm::vec2> tl1 = InterpolateTwoElementValues(CanvasPointToVec2(tv0), CanvasPointToVec2(tv1), steps1);
-	std::vector<glm::vec2> tl2 = InterpolateTwoElementValues(CanvasPointToVec2(tv0), CanvasPointToVec2(tv2), steps2);
-	for (int y = v0.y; y >= v1.y; y--) {		
+Shape2D TexturedFlatBottomTriangle2D(CanvasPoint v0, CanvasPoint v1, CanvasPoint v2, CanvasPoint tv0, CanvasPoint tv1, CanvasPoint tv2) {
+	float slope1 = (v2.x - v0.x) / (v2.y - v0.y);
+	float slope2 = (v2.x - v1.x) / (v2.y - v1.y);
+	float x1 = v2.x;
+	float x2 = v2.x;
+	std::vector<CanvasPoint> ps;
+
+	glm::vec2 diff1 = CanvasPointToVec2(v0) - CanvasPointToVec2(v2);
+	float steps1 = fmax(fabs(diff1.x), fabs(diff1.y));
+
+	glm::vec2 diff2 = CanvasPointToVec2(v1) - CanvasPointToVec2(v2);
+	float steps2 = fmax(fabs(diff2.x), fabs(diff2.y));
+	float steps = fmax(steps1, steps2);
+	std::vector<glm::vec2> tl1 = InterpolateTwoElementValues(CanvasPointToVec2(tv2), CanvasPointToVec2(tv0), steps);
+	std::vector<glm::vec2> tl2 = InterpolateTwoElementValues(CanvasPointToVec2(tv2), CanvasPointToVec2(tv1), steps);
+	for (int s = 0; s < steps; s++) {
+		int y = v2.y + s;
 		Shape2D l = CreateLine2D(CanvasPoint(x1, y), CanvasPoint(x2, y), Colour());
 		x1 += slope1;
 		x2 += slope2;
-		std::vector<glm::vec2> textureScanline = InterpolateTwoElementValues(glm::vec2(x1, y), glm::vec2())
+		std::vector<glm::vec2> textureScanline = InterpolateTwoElementValues(tl1[s], tl2[s], l.points.size());
+		for (int i = 0; i < l.points.size(); i++) {
+			l.points[i].texturePoint = TexturePoint(textureScanline[i].x, textureScanline[i].y);
+		}
+		ps.insert(ps.begin(), l.points.begin(), l.points.end());
 	}
+	return { ps, Colour() };
 }
 
-Shape2D CreateTexturedTriangle2D(CanvasTriangle verticies, CanvasTriangle texturedTriangle) {
+CanvasPoint TexturePointToCanvasPoint(TexturePoint t) {
+	return CanvasPoint(t.x, t.y);
+} 
+
+std::pair<Shape2D, Shape2D> CreateTexturedTriangle2D(CanvasTriangle verticies, CanvasTriangle texturedTriangle) {
+	verticies.v0().texturePoint = CanvasPointToTexturePoint(texturedTriangle.v0());
+	verticies.v1().texturePoint = CanvasPointToTexturePoint(texturedTriangle.v1());
+	verticies.v2().texturePoint = CanvasPointToTexturePoint(texturedTriangle.v2());
+
+	SortVerticies(verticies);
+	CanvasPoint v0 = verticies.v0();
+	CanvasPoint v1 = verticies.v1();
+	CanvasPoint v2 = verticies.v2();
+	CanvasPoint vt0 = TexturePointToCanvasPoint(v0.texturePoint);
+	CanvasPoint vt1 = TexturePointToCanvasPoint(v1.texturePoint);
+	CanvasPoint vt2 = TexturePointToCanvasPoint(v2.texturePoint);
+	std::vector<CanvasPoint> ps;
+	if (verticies.v1().y == verticies.v2().y) {
+		ps = TexturedFlatBottomTriangle2D(v0, v1, v2, vt0, vt1, vt2).points;
+	} 
+	else if (v0.y == v1.y) {
+		ps = TexturedFlatToppedTriangle2D(v0, v1, v2, vt0, vt1, vt2).points;
+	} 
+	else {
+		float v3x = v0.x + ((v1.y - v0.y) / (v2.y - v0.y)) * (v2.x - v0.x);
+		CanvasPoint v3 = CanvasPoint(v3x, v1.y);
+		// Get v3 in texture coordinates.
+		glm::vec2 v2v0 = CanvasPointToVec2(v0) - CanvasPointToVec2(v2);
+		glm::vec2 v2v3 = CanvasPointToVec2(v3) - CanvasPointToVec2(v2);
+		glm::vec2 vt2vt0 = CanvasPointToVec2(vt0) - CanvasPointToVec2(vt2);  
+		float s = glm::length(v2v0) / glm::length(v2v3);
+		glm::vec2 vt3vec2 = vt2vt0 * s;
+		CanvasPoint vt3 = CanvasPoint(vt3vec2.x, vt3vec2.y);
+
+		Shape2D bottom = TexturedFlatBottomTriangle2D(v1, v3, v2, vt1, vt3, vt2);
+		Shape2D top = TexturedFlatToppedTriangle2D(v0, v1, v3, vt0, vt1, vt3);
+		ps.insert(ps.begin(), bottom.points.begin(), bottom.points.end());
+		ps.insert(ps.begin(), top.points.begin(), top.points.end());
+	}
+	Shape2D outline = CreateStrokedTriangle2D(verticies, Colour(255, 255, 255));
+	Shape2D shaded = { ps, Colour() };
+	return std::make_pair(shaded, outline);
+}
+
+Shape2D CreateTexturedTriangle2DBarycentric(CanvasTriangle verticies, CanvasTriangle texturedTriangle) {
 	verticies.v0().texturePoint = CanvasPointToTexturePoint(texturedTriangle.v0());
 	verticies.v1().texturePoint = CanvasPointToTexturePoint(texturedTriangle.v1());
 	verticies.v2().texturePoint = CanvasPointToTexturePoint(texturedTriangle.v2());
@@ -334,8 +417,9 @@ void WitchSymbol(DrawingWindow &window) {
 void TestTextureMapping(DrawingWindow &window, TextureMap texture) {
 	CanvasTriangle textureTriangle = CanvasTriangle(CanvasPoint(195, 10), CanvasPoint(395, 380), CanvasPoint(65, 330));
 	CanvasTriangle triangle = CanvasTriangle(CanvasPoint(160, 10), CanvasPoint(300, 230), CanvasPoint(10, 150));
-	Shape2D tri = CreateTexturedTriangle2D(triangle, textureTriangle);
-	DrawTexturedShape2D(window, tri, texture);
+	std::pair<Shape2D, Shape2D> tri = CreateTexturedTriangle2D(triangle, textureTriangle);
+	DrawTexturedShape2D(window, tri.first, texture);
+	DrawShape2D(window, tri.second);
 }
 
 void draw(DrawingWindow &window, std::vector<Shape2D> shapes, TextureMap texture) {
