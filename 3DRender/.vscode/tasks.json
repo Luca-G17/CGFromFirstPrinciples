@@ -1,0 +1,18 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "clang build",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "onlybuild",
+                "--directory=${workspaceFolder};"
+            ],
+            "group": {
+                "kind": "build",
+                "isDefault": true
+            }
+        }
+    ]
+}

@@ -142,7 +142,7 @@ Shape2D TexturedFlatToppedTriangle2D(CanvasPoint v0, CanvasPoint v1, CanvasPoint
 
 	glm::vec2 diff2 = CanvasPointToVec2(v2) - CanvasPointToVec2(v0);
 	float steps2 = fmax(fabs(diff2.x), fabs(diff2.y));
-	float steps = fmax(steps1, steps2);
+	float steps = fmin(steps1, steps2);
 	std::vector<glm::vec2> tl1 = InterpolateTwoElementValues(CanvasPointToVec2(tv0), CanvasPointToVec2(tv1), steps);
 	std::vector<glm::vec2> tl2 = InterpolateTwoElementValues(CanvasPointToVec2(tv0), CanvasPointToVec2(tv2), steps);
 	for (int s = 0; s < steps; s++) {
@@ -150,9 +150,6 @@ Shape2D TexturedFlatToppedTriangle2D(CanvasPoint v0, CanvasPoint v1, CanvasPoint
 		Shape2D l = CreateLine2D(CanvasPoint(x1, y), CanvasPoint(x2, y), Colour());
 		x1 -= slope1;
 		x2 -= slope2;
-		if (y <= v1.y) {
-			printf("LIGMABALLS");
-		}
 		std::vector<glm::vec2> textureScanline = InterpolateTwoElementValues(tl1[s], tl2[s], l.points.size());
 		for (int i = 0; i < l.points.size(); i++) {
 			l.points[i].texturePoint = TexturePoint(textureScanline[i].x, textureScanline[i].y);
@@ -174,7 +171,7 @@ Shape2D TexturedFlatBottomTriangle2D(CanvasPoint v0, CanvasPoint v1, CanvasPoint
 
 	glm::vec2 diff2 = CanvasPointToVec2(v1) - CanvasPointToVec2(v2);
 	float steps2 = fmax(fabs(diff2.x), fabs(diff2.y));
-	float steps = fmax(steps1, steps2);
+	float steps = fmin(steps1, steps2);
 	std::vector<glm::vec2> tl1 = InterpolateTwoElementValues(CanvasPointToVec2(tv2), CanvasPointToVec2(tv0), steps);
 	std::vector<glm::vec2> tl2 = InterpolateTwoElementValues(CanvasPointToVec2(tv2), CanvasPointToVec2(tv1), steps);
 	for (int s = 0; s < steps; s++) {
@@ -392,8 +389,10 @@ void DrawPoints(DrawingWindow &window, std::vector<glm::vec2> points, int colour
 void DrawTexturedShape2D(DrawingWindow &window, Shape2D shape, TextureMap texture) {
 	for (CanvasPoint p : shape.points) {
 		int pixelIndex = p.texturePoint.y * texture.width + p.texturePoint.x;
-		uint32_t col = texture.pixels.at(pixelIndex);
-		window.setPixelColour(p.x, p.y, col);
+		if (pixelIndex < texture.pixels.size()) {
+			uint32_t col = texture.pixels.at(pixelIndex);
+			window.setPixelColour(p.x, p.y, col);
+		}
 	}
 }
 
@@ -427,9 +426,9 @@ void draw(DrawingWindow &window, std::vector<Shape2D> shapes, TextureMap texture
 	// RedNoise(window);
 	// GrayscaleGradient(window);
 	// TwoDGradient(window);
-	// witchSymbol(window);
+	WitchSymbol(window);
 
-	TestTextureMapping(window, texture);
+	// TestTextureMapping(window, texture);
 	for (Shape2D shape : shapes) {
 		DrawShape2D(window, shape);
 	}
