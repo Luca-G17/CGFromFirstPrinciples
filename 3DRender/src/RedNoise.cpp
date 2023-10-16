@@ -377,24 +377,27 @@ struct Camera {
 	float focalLength;
 };
 
-void Pointcloud(DrawingWindow& window, std::vector<ModelTriangle> triangles, Camera camera) {
+Shape2D Pointcloud(std::vector<ModelTriangle> triangles, Camera camera) {
+	std::vector<CanvasPoint> ps;
 	for (ModelTriangle triangle : triangles) {
 		for (glm::vec3 vertex : triangle.vertices) {
-			CanvasPoint p = getCanvasIntersectionPoint(camera.position, vertex, camera.focalLength);
-			window.setPixelColour(p.x, p.y, PackColour(255, 255, 255));
+			ps.push_back(getCanvasIntersectionPoint(camera.position, vertex, camera.focalLength));
 		}
 	}
+	return { ps, Colour(255, 255, 255) };
 }
 
-void Wireframe(DrawingWindow& window, std::vector<ModelTriangle> triangles, Camera camera) {
+std::vector<Shape2D> Wireframe(std::vector<ModelTriangle> triangles, Camera camera) {
+	std::vector<Shape2D> wireframe;
 	for (ModelTriangle triangle : triangles) {
 		CanvasPoint p1 = getCanvasIntersectionPoint(camera.position, triangle.vertices[0], camera.focalLength);
 		CanvasPoint p2 = getCanvasIntersectionPoint(camera.position, triangle.vertices[1], camera.focalLength);
 		CanvasPoint p3 = getCanvasIntersectionPoint(camera.position, triangle.vertices[2], camera.focalLength);
 
 		Shape2D triangle2D = CreateStrokedTriangle2D(CanvasTriangle(p1, p2, p3), Colour(255, 255, 255));
-		DrawShape2D(window, triangle2D);
+		wireframe.push_back(triangle2D);
 	}
+	return wireframe;
 }
 
 ModelTriangle TranslateTriangle(ModelTriangle tri, glm::vec3 t) {
@@ -419,60 +422,87 @@ std::vector<std::vector<DepthPoint>> RasterisedRender(DrawingWindow& window, std
 	return depthBuffer;
 }
 
-void draw2D(DrawingWindow &window, std::vector<Shape2D> shapes) {
-	window.clearPixels();
-	// RedNoise(window);
-	// GrayscaleGradient(window);
-	// TwoDGradient(window);
-	// WitchSymbol(window);
+enum Drawing {
+	GRAYSCALE_GRADIENT,
+	TWO_D_GRADIENT,
+	WITCH_SYMBOL,
+	RANDOM_TRIANGLES,
+	POINT_CLOUD,
+	WIRE_FRAME,
+	RASTERISED_3D,
+};
 
-	// TestTextureMapping(window, texture);
-	for (Shape2D shape : shapes) {
-		DrawShape2D(window, shape);
-	}
-}
-
-void draw3D(DrawingWindow &window, std::vector<std::vector<DepthPoint>> depthBuffer, Camera camera) {
+void draw2D(DrawingWindow &window, std::vector<Shape2D> shapes, Drawing d) {
 	window.clearPixels();
-	// Pointcloud(window, triangles, camera);
-	// Wireframe(window, triangles, camera);
-	for (int y = 0; y < HEIGHT; y++) {
-		for (int x = 0; x < WIDTH; x++) {
-			Colour c  = depthBuffer[y][x].colour;
-			window.setPixelColour(x, y, PackColour(c.red, c.green, c.blue));
+	switch (d) {
+		case GRAYSCALE_GRADIENT:
+			GrayscaleGradient(window);
+			break;
+		case TWO_D_GRADIENT:
+			TwoDGradient(window);
+			break;
+		case WITCH_SYMBOL:
+			WitchSymbol(window);
+			break;
+		default: {
+			for (Shape2D shape : shapes) {
+				DrawShape2D(window, shape);
+			}
 		}
 	}
 }
 
-void handleEvent(SDL_Event event, DrawingWindow &window, std::vector<Shape2D> &shapes) {
+bool handleEvent(SDL_Event event, DrawingWindow &window, std::vector<Shape2D> &shapes, Drawing d) {
 	if (event.type == SDL_KEYDOWN) {
 		if (event.key.keysym.sym == SDLK_LEFT) std::cout << "LEFT" << std::endl;
 		else if (event.key.keysym.sym == SDLK_RIGHT) std::cout << "RIGHT" << std::endl;
 		else if (event.key.keysym.sym == SDLK_UP) std::cout << "UP" << std::endl;
 		else if (event.key.keysym.sym == SDLK_DOWN) std::cout << "DOWN" << std::endl;
-		else if (event.key.keysym.sym == SDLK_u) AddRandomTriangle(false, shapes);
-		else if (event.key.keysym.sym == SDLK_f) AddRandomTriangle(true, shapes);
+		else if (event.key.keysym.sym == SDLK_u && d == RANDOM_TRIANGLES) AddRandomTriangle(false, shapes);
+		else if (event.key.keysym.sym == SDLK_f && d == RANDOM_TRIANGLES) AddRandomTriangle(true, shapes);
 	} else if (event.type == SDL_MOUSEBUTTONDOWN) {
 		window.savePPM("output.ppm");
 		window.saveBMP("output.bmp");
+	} else if (event.type == SDL_QUIT) {
+		return true;
 	}
+	return false;
 }
 
-void run() {
+void run(Drawing draw) {
 	DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
 	SDL_Event event;
 	std::vector<Shape2D> shapes;
-	OBJFile objs("cornell-box.obj", "objs/", 0.35);
-	std::vector<ModelTriangle> triangles = objs.GetTriangles();
-	Camera camera = { glm::vec3(0.0, 0.0, 4.0), 2.0 };
-	std::vector<std::vector<DepthPoint>> depthBuffer = RasterisedRender(window, triangles, camera);
+	bool quit = false;
 
-	while (true) {
-		// We MUST poll for events - otherwise the window will freeze !
-		if (window.pollForInputEvents(event)) handleEvent(event, window, shapes);
-		// draw2D(window, shapes);
-		draw3D(window, depthBuffer, camera);
-		// Need to render the frame at the end, or nothing actually gets shown on the screen !
+	if (draw == POINT_CLOUD || draw == WIRE_FRAME || draw == RASTERISED_3D) {
+		OBJFile objs("cornell-box.obj", "objs/", 0.35);
+		std::vector<ModelTriangle> triangles = objs.GetTriangles();
+		Camera camera = { glm::vec3(0.0, 0.0, 4.0), 2.0 };
+		if (draw == RASTERISED_3D) {
+			std::vector<std::vector<DepthPoint>> depthBuffer = RasterisedRender(window, triangles, camera);
+			while (!quit) {
+				if (window.pollForInputEvents(event)) quit = handleEvent(event, window, shapes, draw);
+				window.clearPixels();
+				for (int y = 0; y < HEIGHT; y++) {
+					for (int x = 0; x < WIDTH; x++) {
+						Colour c  = depthBuffer[y][x].colour;
+						window.setPixelColour(x, y, PackColour(c.red, c.green, c.blue));
+					}
+				}				
+				window.renderFrame();
+			}
+			return;
+		}
+		else {
+			if (draw == POINT_CLOUD) shapes.push_back(Pointcloud(triangles, camera));
+			else shapes = Wireframe(triangles, camera);
+		}
+	}
+
+	while (!quit) {
+		if (window.pollForInputEvents(event)) quit = handleEvent(event, window, shapes, draw);
+		draw2D(window, shapes, draw);
 		window.renderFrame();
 	}
 }
@@ -483,5 +513,6 @@ int main(int argc, char *argv[]) {
 	r1.rlim_cur = stackSize;
 	if (setrlimit(RLIMIT_STACK, &r1) != 0)
 		std::cerr << "setrlimit returned error\n";
-	run();
+	
+	run(WIRE_FRAME);
 }
