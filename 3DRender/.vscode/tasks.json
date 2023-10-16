@@ -13,6 +13,23 @@
                 "kind": "build",
                 "isDefault": true
             }
+        },
+        {
+            "label": "clang clean",
+            "type": "shell",
+            "command": "make",
+            "args": [
+                "clean",
+                "--directory=${workspaceFolder};"
+            ]
+        },
+        {
+            "label": "clang clean build",
+            "dependsOrder": "sequence",
+            "dependsOn":[
+                "clang clean",
+                "clang build"
+            ]
         }
     ]
 }

@@ -1,5 +1,6 @@
 #include <array>
 #include "DrawingWindow.h"
+#include <cstring>
 // On some platforms you may need to include <cstring> (if you compiler can't find memset !)
 
 DrawingWindow::DrawingWindow() {}

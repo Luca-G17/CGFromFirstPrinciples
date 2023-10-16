@@ -15,12 +15,17 @@
 #include <map>
 #include <ModelTriangle.h>
 
-#define WIDTH 680
-#define HEIGHT 540
+#define WIDTH 480
+#define HEIGHT 320
 
 struct Shape2D {
 	std::vector<CanvasPoint> points;
 	Colour colour;
+};
+
+struct DepthPoint {
+	Colour colour;
+	float depth;
 };
 
 std::vector<std::string> Split(std::string str, std::string delimiter) {
@@ -182,7 +187,7 @@ glm::vec3 CanvasPointToVec3(CanvasPoint p) {
 	return { p.x, p.y, 0 };
 }
 
-std::pair<Shape2D, Shape2D> CreateFilledTriangle2D(CanvasTriangle verticies, Colour c) {
+Shape2D CreateFilledTriangle2D(CanvasTriangle verticies, Colour c, ModelTriangle* pModelTriangle, DepthPoint depthBuffer[HEIGHT][WIDTH]) {
 	CanvasPoint v0 = verticies.v0();
 	CanvasPoint v1 = verticies.v1();
 	CanvasPoint v2 = verticies.v2();
@@ -207,11 +212,23 @@ std::pair<Shape2D, Shape2D> CreateFilledTriangle2D(CanvasTriangle verticies, Col
 			float gamma = glm::length(glm::cross(PA, PB)) / areaScalar;
 			if ((alpha >= 0 && alpha <= 1) && (beta >= 0 && beta <= 1) && (gamma >= 0 && gamma <= 1) && (fabs(alpha + beta + gamma - 1) <= 0.01)) {
 				ps.push_back(CanvasPoint(x, y));
+				if (pModelTriangle) {
+					// Convert barcyentric to cartesian
+					glm::vec3 coords3d = (pModelTriangle->vertices[0] * alpha) + (pModelTriangle->vertices[1] * beta) + (pModelTriangle->vertices[2] * gamma);
+					float depth = -1 / coords3d.z;
+					if (depthBuffer[y][x].depth < depth) {
+						depthBuffer[y][x] = { c, depth };
+					}
+				}
 			}
 		}
 	}
+	return { ps, c };
+}
+
+std::pair<Shape2D, Shape2D> FilledTriangle2DWithOutline(CanvasTriangle verticies, Colour c) {
+	Shape2D shaded = CreateFilledTriangle2D(verticies, c, nullptr, nullptr);
 	Shape2D outline = CreateStrokedTriangle2D(verticies, Colour(255, 255, 255));
-	Shape2D shaded = { ps, c };
 	return std::make_pair(shaded, outline);
 }
 
@@ -291,7 +308,7 @@ Colour RandomColour() {
 
 void AddRandomTriangle(bool filled, std::vector<Shape2D> &shapes) {
 	if (filled) {
-		std::pair<Shape2D, Shape2D> filled = CreateFilledTriangle2D(
+		std::pair<Shape2D, Shape2D> filled = FilledTriangle2DWithOutline(
 			CanvasTriangle(
 				RandomCanvasPoint(),
 				RandomCanvasPoint(),
@@ -376,13 +393,17 @@ void Wireframe(DrawingWindow& window, std::vector<ModelTriangle> triangles, Came
 	}
 }
 
-void RasterisedRender(DrawingWindow& window, std::vector<ModelTriangle> triangles, Camera camera) {
+void RasterisedRender(DrawingWindow& window, std::vector<ModelTriangle> triangles, Camera camera, DepthPoint depthBuffer[HEIGHT][WIDTH]) {
+	for (int y = 0; y < HEIGHT; y++) {
+		for (int x = 0; x < WIDTH; x++)
+			depthBuffer[y][x] = { Colour(), 0 };
+	}
 	for (ModelTriangle triangle : triangles) {
+		// We must maintain a depth buffer as we build the triangles
 		CanvasPoint p1 = getCanvasIntersectionPoint(camera.position, triangle.vertices[0], camera.focalLength);
 		CanvasPoint p2 = getCanvasIntersectionPoint(camera.position, triangle.vertices[1], camera.focalLength);
 		CanvasPoint p3 = getCanvasIntersectionPoint(camera.position, triangle.vertices[2], camera.focalLength);
-		Shape2D triangle2D = CreateFilledTriangle2D(CanvasTriangle(p1, p2, p3), triangle.colour).first;
-		DrawShape2D(window, triangle2D);
+		CreateFilledTriangle2D(CanvasTriangle(p1, p2, p3), triangle.colour, &triangle, depthBuffer);
 	}
 }
 
@@ -391,7 +412,7 @@ void draw2D(DrawingWindow &window, std::vector<Shape2D> shapes) {
 	// RedNoise(window);
 	// GrayscaleGradient(window);
 	// TwoDGradient(window);
-	WitchSymbol(window);
+	// WitchSymbol(window);
 
 	// TestTextureMapping(window, texture);
 	for (Shape2D shape : shapes) {
@@ -399,11 +420,16 @@ void draw2D(DrawingWindow &window, std::vector<Shape2D> shapes) {
 	}
 }
 
-void draw3D(DrawingWindow &window, std::vector<ModelTriangle> triangles, Camera camera) {
+void draw3D(DrawingWindow &window, DepthPoint depthBuffer[HEIGHT][WIDTH], Camera camera) {
 	window.clearPixels();
 	// Pointcloud(window, triangles, camera);
 	// Wireframe(window, triangles, camera);
-	RasterisedRender(window, triangles, camera);
+	for (int y = 0; y < HEIGHT; y++) {
+		for (int x = 0; x < WIDTH; x++) {
+			Colour c  = depthBuffer[y][x].colour;
+			window.setPixelColour(x, y, PackColour(c.red, c.green, c.blue));
+		}
+	}
 }
 
 void handleEvent(SDL_Event event, DrawingWindow &window, std::vector<Shape2D> &shapes) {
@@ -421,17 +447,21 @@ void handleEvent(SDL_Event event, DrawingWindow &window, std::vector<Shape2D> &s
 }
 
 int main(int argc, char *argv[]) {
+	printf("Test\n");
 	DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
 	SDL_Event event;
 	std::vector<Shape2D> shapes;
 	OBJFile objs("cornell-box.obj", "objs/", 0.35);
 	std::vector<ModelTriangle> triangles = objs.GetTriangles();
 	Camera camera = { glm::vec3(0.0, 0.0, 4.0), 2.0 };
+	DepthPoint depthBuffer[HEIGHT][WIDTH];
+	RasterisedRender(window, triangles, camera, depthBuffer);
+
 	while (true) {
 		// We MUST poll for events - otherwise the window will freeze !
 		if (window.pollForInputEvents(event)) handleEvent(event, window, shapes);
 		// draw2D(window, shapes);
-		draw3D(window, triangles, camera);
+		draw3D(window, depthBuffer, camera);
 		// Need to render the frame at the end, or nothing actually gets shown on the screen !
 		window.renderFrame();
 	}
