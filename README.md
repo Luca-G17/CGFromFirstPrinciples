@@ -126,3 +126,20 @@ std::pair<Shape2D, Shape2D> CreateFilledTriangle2D(CanvasTriangle verticies, Col
 	return std::make_pair(shaded, outline);
 }
 ```
+## Week 4 ##
+
+3D Rendering:  
+![image](https://github.com/LucaUoB/CGRepo/assets/63655147/f955a64e-8ec1-48d8-acb8-472387d67138)
+![image](https://github.com/LucaUoB/CGRepo/assets/63655147/362f6bc7-82a8-45a3-9144-fb6759cc8827)
+![image](https://github.com/LucaUoB/CGRepo/assets/63655147/2349d127-ff66-4968-9d9c-6b888f4bf221)
+
+```c++
+CanvasPoint getCanvasIntersectionPoint(glm::vec3 cameraPosition, glm::vec3 vertexPosition, float focalLength) {
+	// transform the vertex such that the camera is the origin
+	glm::vec3 vPos = vertexPosition - cameraPosition;
+	float u = (300 * focalLength * vPos.x / -vPos.z) + WIDTH / 2.0;
+	float v = (300 * focalLength * vPos.y / vPos.z) + HEIGHT / 2.0;
+	return CanvasPoint(u, v);
+}
+```
+
