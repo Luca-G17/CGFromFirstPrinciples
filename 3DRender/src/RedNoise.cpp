@@ -14,9 +14,10 @@
 #include <sstream>
 #include <map>
 #include <ModelTriangle.h>
+#include <sys/resource.h>
 
-#define WIDTH 480
-#define HEIGHT 320
+#define WIDTH 680
+#define HEIGHT 520
 
 struct Shape2D {
 	std::vector<CanvasPoint> points;
@@ -131,7 +132,7 @@ struct OBJFile {
 		std::vector<OBJ> filteredObjects;
 		for (size_t i = 0; i < objects.size(); i++) {
 			OBJ object = objects[i];
-			if (object.name == "right_wall") {
+			if (object.name == "back_wall") {
 				filteredObjects.push_back(object);
 			}
 		}
@@ -187,7 +188,7 @@ glm::vec3 CanvasPointToVec3(CanvasPoint p) {
 	return { p.x, p.y, 0 };
 }
 
-Shape2D CreateFilledTriangle2D(CanvasTriangle verticies, Colour c, ModelTriangle* pModelTriangle, DepthPoint depthBuffer[HEIGHT][WIDTH]) {
+Shape2D CreateFilledTriangle2D(CanvasTriangle verticies, Colour c, ModelTriangle* pModelTriangle, std::vector<std::vector<DepthPoint>> *pDepthBuffer) {
 	CanvasPoint v0 = verticies.v0();
 	CanvasPoint v1 = verticies.v1();
 	CanvasPoint v2 = verticies.v2();
@@ -212,12 +213,15 @@ Shape2D CreateFilledTriangle2D(CanvasTriangle verticies, Colour c, ModelTriangle
 			float gamma = glm::length(glm::cross(PA, PB)) / areaScalar;
 			if ((alpha >= 0 && alpha <= 1) && (beta >= 0 && beta <= 1) && (gamma >= 0 && gamma <= 1) && (fabs(alpha + beta + gamma - 1) <= 0.01)) {
 				ps.push_back(CanvasPoint(x, y));
-				if (pModelTriangle) {
+				if (pModelTriangle && pDepthBuffer) {
 					// Convert barcyentric to cartesian
+					std::vector<std::vector<DepthPoint>>& depthBuffer = *pDepthBuffer;
 					glm::vec3 coords3d = (pModelTriangle->vertices[0] * alpha) + (pModelTriangle->vertices[1] * beta) + (pModelTriangle->vertices[2] * gamma);
 					float depth = -1 / coords3d.z;
-					if (depthBuffer[y][x].depth < depth) {
-						depthBuffer[y][x] = { c, depth };
+					if (y < HEIGHT && y >= 0 && x < WIDTH && x > 0) {
+						if (depthBuffer[y][x].depth < depth) {
+							depthBuffer[y][x] = { c, depth };
+						}
 					}
 				}
 			}
@@ -393,18 +397,26 @@ void Wireframe(DrawingWindow& window, std::vector<ModelTriangle> triangles, Came
 	}
 }
 
-void RasterisedRender(DrawingWindow& window, std::vector<ModelTriangle> triangles, Camera camera, DepthPoint depthBuffer[HEIGHT][WIDTH]) {
+ModelTriangle TranslateTriangle(ModelTriangle tri, glm::vec3 t) {
+	return ModelTriangle(tri.vertices[0] + t, tri.vertices[1] + t, tri.vertices[2] + t, tri.colour);
+}
+
+std::vector<std::vector<DepthPoint>> RasterisedRender(DrawingWindow& window, std::vector<ModelTriangle> triangles, Camera camera) {
+	std::vector<std::vector<DepthPoint>> depthBuffer;
 	for (int y = 0; y < HEIGHT; y++) {
+		depthBuffer.push_back(std::vector<DepthPoint>());
 		for (int x = 0; x < WIDTH; x++)
-			depthBuffer[y][x] = { Colour(), 0 };
+			depthBuffer[y].push_back({ Colour(), 0 });
 	}
 	for (ModelTriangle triangle : triangles) {
 		// We must maintain a depth buffer as we build the triangles
 		CanvasPoint p1 = getCanvasIntersectionPoint(camera.position, triangle.vertices[0], camera.focalLength);
 		CanvasPoint p2 = getCanvasIntersectionPoint(camera.position, triangle.vertices[1], camera.focalLength);
 		CanvasPoint p3 = getCanvasIntersectionPoint(camera.position, triangle.vertices[2], camera.focalLength);
-		CreateFilledTriangle2D(CanvasTriangle(p1, p2, p3), triangle.colour, &triangle, depthBuffer);
+		ModelTriangle cameraSpaceTriangle = TranslateTriangle(triangle, -camera.position);
+		CreateFilledTriangle2D(CanvasTriangle(p1, p2, p3), triangle.colour, &cameraSpaceTriangle, &depthBuffer);
 	}
+	return depthBuffer;
 }
 
 void draw2D(DrawingWindow &window, std::vector<Shape2D> shapes) {
@@ -420,7 +432,7 @@ void draw2D(DrawingWindow &window, std::vector<Shape2D> shapes) {
 	}
 }
 
-void draw3D(DrawingWindow &window, DepthPoint depthBuffer[HEIGHT][WIDTH], Camera camera) {
+void draw3D(DrawingWindow &window, std::vector<std::vector<DepthPoint>> depthBuffer, Camera camera) {
 	window.clearPixels();
 	// Pointcloud(window, triangles, camera);
 	// Wireframe(window, triangles, camera);
@@ -446,16 +458,14 @@ void handleEvent(SDL_Event event, DrawingWindow &window, std::vector<Shape2D> &s
 	}
 }
 
-int main(int argc, char *argv[]) {
-	printf("Test\n");
+void run() {
 	DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
 	SDL_Event event;
 	std::vector<Shape2D> shapes;
 	OBJFile objs("cornell-box.obj", "objs/", 0.35);
 	std::vector<ModelTriangle> triangles = objs.GetTriangles();
 	Camera camera = { glm::vec3(0.0, 0.0, 4.0), 2.0 };
-	DepthPoint depthBuffer[HEIGHT][WIDTH];
-	RasterisedRender(window, triangles, camera, depthBuffer);
+	std::vector<std::vector<DepthPoint>> depthBuffer = RasterisedRender(window, triangles, camera);
 
 	while (true) {
 		// We MUST poll for events - otherwise the window will freeze !
@@ -465,4 +475,13 @@ int main(int argc, char *argv[]) {
 		// Need to render the frame at the end, or nothing actually gets shown on the screen !
 		window.renderFrame();
 	}
+}
+
+int main(int argc, char *argv[]) {
+	const rlim_t stackSize = 16 * 1024 * 1024;
+	struct rlimit r1;
+	r1.rlim_cur = stackSize;
+	if (setrlimit(RLIMIT_STACK, &r1) != 0)
+		std::cerr << "setrlimit returned error\n";
+	run();
 }
