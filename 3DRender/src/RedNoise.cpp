@@ -15,9 +15,10 @@
 #include <map>
 #include <ModelTriangle.h>
 #include <sys/resource.h>
+#include <math.h>
 
-#define WIDTH 680
-#define HEIGHT 520
+#define WIDTH 420
+#define HEIGHT 300
 
 struct Shape2D {
 	std::vector<CanvasPoint> points;
@@ -188,7 +189,7 @@ glm::vec3 CanvasPointToVec3(CanvasPoint p) {
 	return { p.x, p.y, 0 };
 }
 
-Shape2D CreateFilledTriangle2D(CanvasTriangle verticies, Colour c, ModelTriangle* pModelTriangle, std::vector<std::vector<DepthPoint>> *pDepthBuffer) {
+Shape2D CreateFilledTriangle2D(CanvasTriangle verticies, const Colour c, const ModelTriangle* pModelTriangle, std::vector<std::vector<DepthPoint>>* const pDepthBuffer) {
 	CanvasPoint v0 = verticies.v0();
 	CanvasPoint v1 = verticies.v1();
 	CanvasPoint v2 = verticies.v2();
@@ -236,11 +237,11 @@ std::pair<Shape2D, Shape2D> FilledTriangle2DWithOutline(CanvasTriangle verticies
 	return std::make_pair(shaded, outline);
 }
 
-std::vector<float> InterpolateSingleFloats(float from, float to, int steps) {
+std::vector<float> InterpolateSingleFloats(const float from, const float to, const int steps) {
 	if (steps <= 1) {
 		return { from };
 	}
-	float step = (to - from) / (steps - 1); 
+	const float step = (to - from) / (steps - 1); 
 	std::vector<float> results;
 	for (int i = 0; i < steps; i++) {
 		results.push_back(from + (step * i));
@@ -248,7 +249,7 @@ std::vector<float> InterpolateSingleFloats(float from, float to, int steps) {
 	return results;
 }
 
-std::vector<glm::vec3> InterpolateThreeElementValues(glm::vec3 from, glm::vec3 to, int steps) {
+std::vector<glm::vec3> InterpolateThreeElementValues(const glm::vec3 from, const glm::vec3 to, const int steps) {
 	glm::vec3 dir = (to - from) * (1.0f / (steps - 1)); 
 	std::vector<glm::vec3> results;
 	for (int i = 0; i < steps; i++) {
@@ -270,12 +271,12 @@ void InterpolateThreeElementsTest() {
 	for (size_t i = 0; i < result.size(); i++) std::cout << result[i].r << ", " << result[i].g << ", " << result[i].b << std::endl;
 }
 
-uint32_t PackColour(uint8_t r, uint8_t g, uint8_t b) {
+uint32_t PackColour(const uint8_t r, const uint8_t g, const uint8_t b) {
 	return (255 << 24) + (r << 16) + (g << 8) + b;
 }
 
 void GrayscaleGradient(DrawingWindow &window) {
-	std::vector<float> row = InterpolateSingleFloats(255, 0, window.width);
+	const std::vector<float> row = InterpolateSingleFloats(255, 0, window.width);
 	std::vector<uint32_t> rowColours;
 	std::transform(row.cbegin(), row.cend(), std::back_inserter(rowColours), [](float f) -> uint32_t { return PackColour(f, f, f); });
 	for (size_t y = 0; y < window.height; y++) {
@@ -286,16 +287,16 @@ void GrayscaleGradient(DrawingWindow &window) {
 }
 
 void TwoDGradient(DrawingWindow &window) {
-	glm::vec3 topLeft(255, 0, 0);        // red 
-	glm::vec3 topRight(0, 0, 255);       // blue 
-	glm::vec3 bottomRight(0, 255, 0);    // green 
-	glm::vec3 bottomLeft(255, 255, 0);   // yellow
+	const glm::vec3 topLeft(255, 0, 0);        // red 
+	const glm::vec3 topRight(0, 0, 255);       // blue 
+	const glm::vec3 bottomRight(0, 255, 0);    // green 
+	const glm::vec3 bottomLeft(255, 255, 0);   // yellow
 
-	std::vector<glm::vec3> left = InterpolateThreeElementValues(topLeft, bottomLeft, window.height);
-	std::vector<glm::vec3> right = InterpolateThreeElementValues(topRight, bottomRight, window.height);
+	const std::vector<glm::vec3> left = InterpolateThreeElementValues(topLeft, bottomLeft, window.height);
+	const std::vector<glm::vec3> right = InterpolateThreeElementValues(topRight, bottomRight, window.height);
 	
 	for (size_t y = 0; y < window.height; y++) {
-		std::vector<glm::vec3> row = InterpolateThreeElementValues(left[y], right[y], window.width);
+		const std::vector<glm::vec3> row = InterpolateThreeElementValues(left[y], right[y], window.width);
 		for (size_t x = 0; x < window.width; x++) {
 			window.setPixelColour(x, y, PackColour(row[x].r, row[x].g, row[x].b));
 		}
@@ -310,7 +311,7 @@ Colour RandomColour() {
 	return Colour(rand() % 256, rand() % 256, rand() % 256);
 }
 
-void AddRandomTriangle(bool filled, std::vector<Shape2D> &shapes) {
+void AddRandomTriangle(const bool filled, std::vector<Shape2D> &shapes) {
 	if (filled) {
 		std::pair<Shape2D, Shape2D> filled = FilledTriangle2DWithOutline(
 			CanvasTriangle(
@@ -331,17 +332,17 @@ void AddRandomTriangle(bool filled, std::vector<Shape2D> &shapes) {
 	}
 }
 
-void DrawPoints(DrawingWindow &window, std::vector<glm::vec2> points, int colour) {
-	for (glm::vec2 p : points) {
+void DrawPoints(DrawingWindow &window, const std::vector<glm::vec2> points, const int colour) {
+	for (const glm::vec2 p : points) {
 		window.setPixelColour(p.x, p.y, colour);
 	}
 }
 
-void DrawTexturedShape2D(DrawingWindow &window, Shape2D shape, TextureMap texture) {
+void DrawTexturedShape2D(DrawingWindow &window, const Shape2D shape, const TextureMap texture) {
 	for (CanvasPoint p : shape.points) {
-		int pixelIndex = p.texturePoint.y * texture.width + p.texturePoint.x;
+		const int pixelIndex = p.texturePoint.y * texture.width + p.texturePoint.x;
 		if (pixelIndex < texture.pixels.size()) {
-			uint32_t col = texture.pixels.at(pixelIndex);
+			const uint32_t col = texture.pixels.at(pixelIndex);
 			window.setPixelColour(p.x, p.y, col);
 		}
 	}
@@ -364,24 +365,68 @@ void WitchSymbol(DrawingWindow &window) {
 	DrawShape2D(window, CreateLine2D(CanvasPoint(midX - WIDTH / 6, midY), CanvasPoint(midX + WIDTH / 6, midY), white));
 }
 
-CanvasPoint getCanvasIntersectionPoint(glm::vec3 cameraPosition, glm::vec3 vertexPosition, float focalLength) {
-	// transform the vertex such that the camera is the origin
-	glm::vec3 vPos = vertexPosition - cameraPosition;
-	float u = (300 * focalLength * vPos.x / -vPos.z) + WIDTH / 2.0;
-	float v = (300 * focalLength * vPos.y / vPos.z) + HEIGHT / 2.0;
-	return CanvasPoint(u, v);
+glm::mat3 RotationMatrix(const float x, const float y, const float z) {
+	//  Roll
+	//  | cos(x) | -sin(x) | 0 |
+	//  | sin(x) |  cos(x) | 0 |    = Rx(x)
+	//  |   0    |    0    | 1 |
+	//
+	//  Yaw
+	//  |  cos(y) | 0 | sin(y) |
+	//  |    0    | 1 |   0    |    = Ry(y)
+	//  | -sin(y) | 0 | cos(y) |
+	//
+	//  Pitch
+	//  | 1 |   0    |    0    |
+	//  | 0 | cos(z) | -sin(z) |    = Rz(z)
+	//  | 0 | sin(z) |  cos(z) |
+	//
+	// R = Rx(x) * Ry(y) * Rz(z)
+	const glm::mat3 roll(glm::vec3(cos(x), sin(x), 0), glm::vec3(-sin(x), cos(x), 0), glm::vec3(0, 0, 1));
+	const glm::mat3 yaw(glm::vec3(cos(y), 0, -sin(y)), glm::vec3(0, 1, 0), glm::vec3(sin(y), 0, cos(y)));
+	const glm::mat3 pitch(glm::vec3(1, 0, 0), glm::vec3(0, cos(z), sin(z)), glm::vec3(0, -sin(z), cos(z)));
+	return yaw * pitch * roll;
 }
 
 struct Camera {
 	glm::vec3 position;
+	glm::vec3 rotation;
+	glm::mat3 rotationMatrix;
 	float focalLength;
+
+	Camera(const glm::vec3 p, const glm::vec3 r, const float f) {
+		position = p;
+		rotation = r;
+		focalLength = f;
+		rotationMatrix = RotationMatrix(rotation.x, rotation.y, rotation.z);
+	}
+
+	void AddRotation(float x, float y, float z) {
+		rotation.x += x;
+		rotation.y += y;
+		rotation.z += z;
+		rotationMatrix = RotationMatrix(rotation.x, rotation.y, rotation.z);
+	}
+
+	void AddTranslation(float x, float y, float z) {
+		position += rotationMatrix * glm::vec3(x, y, z); 
+	}
 };
+
+CanvasPoint getCanvasIntersectionPoint(const Camera &camera, glm::vec3 vertexPosition, float focalLength) {
+	// transform the vertex such that the camera is the origin
+	glm::vec3 vPos = camera.rotationMatrix * (vertexPosition - camera.position);
+	float u = (150 * focalLength * vPos.x / -vPos.z) + WIDTH / 2.0;
+	float v = (150 * focalLength * vPos.y / vPos.z) + HEIGHT / 2.0;
+	return CanvasPoint(u, v);
+}
+
 
 Shape2D Pointcloud(std::vector<ModelTriangle> triangles, Camera camera) {
 	std::vector<CanvasPoint> ps;
 	for (ModelTriangle triangle : triangles) {
 		for (glm::vec3 vertex : triangle.vertices) {
-			ps.push_back(getCanvasIntersectionPoint(camera.position, vertex, camera.focalLength));
+			ps.push_back(getCanvasIntersectionPoint(camera, vertex, camera.focalLength));
 		}
 	}
 	return { ps, Colour(255, 255, 255) };
@@ -390,9 +435,9 @@ Shape2D Pointcloud(std::vector<ModelTriangle> triangles, Camera camera) {
 std::vector<Shape2D> Wireframe(std::vector<ModelTriangle> triangles, Camera camera) {
 	std::vector<Shape2D> wireframe;
 	for (ModelTriangle triangle : triangles) {
-		CanvasPoint p1 = getCanvasIntersectionPoint(camera.position, triangle.vertices[0], camera.focalLength);
-		CanvasPoint p2 = getCanvasIntersectionPoint(camera.position, triangle.vertices[1], camera.focalLength);
-		CanvasPoint p3 = getCanvasIntersectionPoint(camera.position, triangle.vertices[2], camera.focalLength);
+		CanvasPoint p1 = getCanvasIntersectionPoint(camera, triangle.vertices[0], camera.focalLength);
+		CanvasPoint p2 = getCanvasIntersectionPoint(camera, triangle.vertices[1], camera.focalLength);
+		CanvasPoint p3 = getCanvasIntersectionPoint(camera, triangle.vertices[2], camera.focalLength);
 
 		Shape2D triangle2D = CreateStrokedTriangle2D(CanvasTriangle(p1, p2, p3), Colour(255, 255, 255));
 		wireframe.push_back(triangle2D);
@@ -400,11 +445,11 @@ std::vector<Shape2D> Wireframe(std::vector<ModelTriangle> triangles, Camera came
 	return wireframe;
 }
 
-ModelTriangle TranslateTriangle(ModelTriangle tri, glm::vec3 t) {
+ModelTriangle TranslateTriangle(const ModelTriangle tri, const glm::vec3 t) {
 	return ModelTriangle(tri.vertices[0] + t, tri.vertices[1] + t, tri.vertices[2] + t, tri.colour);
 }
 
-std::vector<std::vector<DepthPoint>> RasterisedRender(DrawingWindow& window, std::vector<ModelTriangle> triangles, Camera camera) {
+std::vector<std::vector<DepthPoint>> RasterisedRender(DrawingWindow& window, const std::vector<ModelTriangle> triangles, const Camera camera) {
 	std::vector<std::vector<DepthPoint>> depthBuffer;
 	for (int y = 0; y < HEIGHT; y++) {
 		depthBuffer.push_back(std::vector<DepthPoint>());
@@ -413,10 +458,10 @@ std::vector<std::vector<DepthPoint>> RasterisedRender(DrawingWindow& window, std
 	}
 	for (ModelTriangle triangle : triangles) {
 		// We must maintain a depth buffer as we build the triangles
-		CanvasPoint p1 = getCanvasIntersectionPoint(camera.position, triangle.vertices[0], camera.focalLength);
-		CanvasPoint p2 = getCanvasIntersectionPoint(camera.position, triangle.vertices[1], camera.focalLength);
-		CanvasPoint p3 = getCanvasIntersectionPoint(camera.position, triangle.vertices[2], camera.focalLength);
-		ModelTriangle cameraSpaceTriangle = TranslateTriangle(triangle, -camera.position);
+		const CanvasPoint p1 = getCanvasIntersectionPoint(camera, triangle.vertices[0], camera.focalLength);
+		const CanvasPoint p2 = getCanvasIntersectionPoint(camera, triangle.vertices[1], camera.focalLength);
+		const CanvasPoint p3 = getCanvasIntersectionPoint(camera, triangle.vertices[2], camera.focalLength);
+		const ModelTriangle cameraSpaceTriangle = TranslateTriangle(triangle, -camera.position);
 		CreateFilledTriangle2D(CanvasTriangle(p1, p2, p3), triangle.colour, &cameraSpaceTriangle, &depthBuffer);
 	}
 	return depthBuffer;
@@ -452,14 +497,28 @@ void draw2D(DrawingWindow &window, std::vector<Shape2D> shapes, Drawing d) {
 	}
 }
 
-bool handleEvent(SDL_Event event, DrawingWindow &window, std::vector<Shape2D> &shapes, Drawing d) {
+bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape2D> &shapes, const Drawing d, Camera* const pCamera) {
 	if (event.type == SDL_KEYDOWN) {
-		if (event.key.keysym.sym == SDLK_LEFT) std::cout << "LEFT" << std::endl;
-		else if (event.key.keysym.sym == SDLK_RIGHT) std::cout << "RIGHT" << std::endl;
-		else if (event.key.keysym.sym == SDLK_UP) std::cout << "UP" << std::endl;
-		else if (event.key.keysym.sym == SDLK_DOWN) std::cout << "DOWN" << std::endl;
-		else if (event.key.keysym.sym == SDLK_u && d == RANDOM_TRIANGLES) AddRandomTriangle(false, shapes);
+	 	if (event.key.keysym.sym == SDLK_u && d == RANDOM_TRIANGLES) AddRandomTriangle(false, shapes);
 		else if (event.key.keysym.sym == SDLK_f && d == RANDOM_TRIANGLES) AddRandomTriangle(true, shapes);
+		else if (pCamera) {
+			Camera& c = *pCamera;
+			constexpr float step = 0.1;
+			constexpr float rotStep = M_PI / 180;
+			// Translations
+			if (event.key.keysym.sym == SDLK_w && d == RASTERISED_3D) c.AddTranslation(0, 0, -step);
+			else if (event.key.keysym.sym == SDLK_s && d == RASTERISED_3D) c.AddTranslation(0, 0, step);
+			else if (event.key.keysym.sym == SDLK_a && d == RASTERISED_3D) c.AddTranslation(-step, 0, 0);
+			else if (event.key.keysym.sym == SDLK_d && d == RASTERISED_3D) c.AddTranslation(step, 0, 0);
+			else if (event.key.keysym.sym == SDLK_SPACE && d == RASTERISED_3D) c.AddTranslation(0, step, 0);
+			else if (event.key.keysym.sym == SDLK_c && d == RASTERISED_3D) c.AddTranslation(0, -step, 0);
+
+			// Rotations
+			else if (event.key.keysym.sym == SDLK_LEFT) c.AddRotation(0, rotStep, 0);
+			else if (event.key.keysym.sym == SDLK_RIGHT) c.AddRotation(0, -rotStep, 0);
+			else if (event.key.keysym.sym == SDLK_UP) c.AddRotation(0, 0, rotStep);
+			else if (event.key.keysym.sym == SDLK_DOWN) c.AddRotation(0, 0, -rotStep);
+		}
 	} else if (event.type == SDL_MOUSEBUTTONDOWN) {
 		window.savePPM("output.ppm");
 		window.saveBMP("output.bmp");
@@ -478,12 +537,12 @@ void run(Drawing draw) {
 	if (draw == POINT_CLOUD || draw == WIRE_FRAME || draw == RASTERISED_3D) {
 		OBJFile objs("cornell-box.obj", "objs/", 0.35);
 		std::vector<ModelTriangle> triangles = objs.GetTriangles();
-		Camera camera = { glm::vec3(0.0, 0.0, 4.0), 2.0 };
+		Camera camera(glm::vec3(0.0, 0.0, 4.0), glm::vec3(0.0, 0.0, 0.0), 2.0);
 		if (draw == RASTERISED_3D) {
-			std::vector<std::vector<DepthPoint>> depthBuffer = RasterisedRender(window, triangles, camera);
 			while (!quit) {
-				if (window.pollForInputEvents(event)) quit = handleEvent(event, window, shapes, draw);
+				if (window.pollForInputEvents(event)) quit = handleEvent(event, window, shapes, draw, &camera);
 				window.clearPixels();
+				std::vector<std::vector<DepthPoint>> depthBuffer = RasterisedRender(window, triangles, camera);
 				for (int y = 0; y < HEIGHT; y++) {
 					for (int x = 0; x < WIDTH; x++) {
 						Colour c  = depthBuffer[y][x].colour;
@@ -501,18 +560,18 @@ void run(Drawing draw) {
 	}
 
 	while (!quit) {
-		if (window.pollForInputEvents(event)) quit = handleEvent(event, window, shapes, draw);
+		if (window.pollForInputEvents(event)) quit = handleEvent(event, window, shapes, draw, nullptr);
 		draw2D(window, shapes, draw);
 		window.renderFrame();
 	}
 }
 
 int main(int argc, char *argv[]) {
-	const rlim_t stackSize = 16 * 1024 * 1024;
+	constexpr rlim_t stackSize = 16 * 1024 * 1024;
 	struct rlimit r1;
 	r1.rlim_cur = stackSize;
 	if (setrlimit(RLIMIT_STACK, &r1) != 0)
 		std::cerr << "setrlimit returned error\n";
 	
-	run(WIRE_FRAME);
+	run(RASTERISED_3D);
 }
