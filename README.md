@@ -1,4 +1,11 @@
 # CGRepo
+
+## Lab Week:
+- [Week 1](#week-1)
+- [Week 2](#week-2)
+- [Week 3](#week-3)
+- [Week 4](#week-4)
+
 ## Week 1 ##
 Red Noise:  
 ![image](https://github.com/LucaUoB/CGRepo/assets/63655147/bd99a178-14cb-4f3f-9bc5-5454b463dcca)
