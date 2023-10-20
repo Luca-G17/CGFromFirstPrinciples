@@ -409,7 +409,14 @@ struct Camera {
 	}
 
 	void AddTranslation(float x, float y, float z) {
-		position += rotationMatrix * glm::vec3(x, y, z); 
+		glm::vec3 delta = RotationMatrix(-rotation.x, -rotation.y, -rotation.z) * glm::vec3(x, y, z);
+		position += delta;
+		std::cout << "(" << delta.x << ", " << delta.y << ", " << delta.z << ")\n";
+	}
+
+	void lookAt(glm::vec3 p) {
+		// Find angle between cameraPositionToP and (0, 0, -1)
+		glm::vec3 cameraToP = P - position;
 	}
 };
 
@@ -514,8 +521,8 @@ bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape
 			else if (event.key.keysym.sym == SDLK_c && d == RASTERISED_3D) c.AddTranslation(0, -step, 0);
 
 			// Rotations
-			else if (event.key.keysym.sym == SDLK_LEFT) c.AddRotation(0, rotStep, 0);
-			else if (event.key.keysym.sym == SDLK_RIGHT) c.AddRotation(0, -rotStep, 0);
+			else if (event.key.keysym.sym == SDLK_LEFT) c.AddRotation(0, -rotStep, 0);
+			else if (event.key.keysym.sym == SDLK_RIGHT) c.AddRotation(0, rotStep, 0);
 			else if (event.key.keysym.sym == SDLK_UP) c.AddRotation(0, 0, rotStep);
 			else if (event.key.keysym.sym == SDLK_DOWN) c.AddRotation(0, 0, -rotStep);
 		}
