@@ -16,12 +16,18 @@
 #include <ModelTriangle.h>
 #include <sys/resource.h>
 #include <math.h>
+#include <glm/gtx/string_cast.hpp>
 
-#define WIDTH 420
+#define WIDTH 440
 #define HEIGHT 300
 
 struct Shape2D {
 	std::vector<CanvasPoint> points;
+	Colour colour;
+};
+
+struct Shape3D {
+	std::vector<glm::vec3> points;
 	Colour colour;
 };
 
@@ -389,6 +395,11 @@ glm::mat3 RotationMatrix(const float x, const float y, const float z) {
 }
 
 struct Camera {
+	bool orbiting = false;
+	glm::vec3 orbitCentre;
+	float orbitRadius;
+	float orbitAngle;
+
 	glm::vec3 position;
 	glm::vec3 rotation;
 	glm::mat3 rotationMatrix;
@@ -401,22 +412,52 @@ struct Camera {
 		rotationMatrix = RotationMatrix(rotation.x, rotation.y, rotation.z);
 	}
 
+	// X = Roll, Y = Yaw, Z = Pitch
 	void AddRotation(float x, float y, float z) {
 		rotation.x += x;
 		rotation.y += y;
 		rotation.z += z;
 		rotationMatrix = RotationMatrix(rotation.x, rotation.y, rotation.z);
+		std::cout << glm::to_string(rotation) << std::endl;
 	}
 
 	void AddTranslation(float x, float y, float z) {
 		glm::vec3 delta = RotationMatrix(-rotation.x, -rotation.y, -rotation.z) * glm::vec3(x, y, z);
 		position += delta;
-		std::cout << "(" << delta.x << ", " << delta.y << ", " << delta.z << ")\n";
 	}
 
 	void lookAt(glm::vec3 p) {
-		// Find angle between cameraPositionToP and (0, 0, -1)
-		glm::vec3 cameraToP = P - position;
+		glm::vec3 cameraToP = p - position;
+		float pitch = atan2(-cameraToP.y, fabs(cameraToP.z));
+		float yaw = atan2(cameraToP.x, -cameraToP.z);
+
+		this->rotation = { 0, yaw, pitch };
+		rotationMatrix = RotationMatrix(rotation.x, rotation.y, rotation.z);
+	}
+
+	void startOrbit(glm::vec3 centre, float radius) {
+		position = centre;
+		position.z += radius;
+		orbitRadius = radius;
+		rotation = glm::vec3(0, 0, 0);
+		rotationMatrix = RotationMatrix(0, 0, 0);
+		orbitAngle = 0;
+		orbiting = true;
+	}
+
+	void stopOrbit() {
+		orbiting = false;
+	}
+
+	void orbitStep() {
+		orbitAngle += M_PI / 180; // Add 1 degree
+		position.x = orbitRadius * sin(orbitAngle) + orbitCentre.x;
+		position.z = orbitRadius * cos(orbitAngle) + orbitCentre.z;
+		lookAt(orbitCentre);
+	}
+
+	void output() {
+		std::cout << "Rotation: " << glm::to_string(rotation) << " Position: " << glm::to_string(position) << std::endl;
 	}
 };
 
@@ -445,7 +486,6 @@ std::vector<Shape2D> Wireframe(std::vector<ModelTriangle> triangles, Camera came
 		CanvasPoint p1 = getCanvasIntersectionPoint(camera, triangle.vertices[0], camera.focalLength);
 		CanvasPoint p2 = getCanvasIntersectionPoint(camera, triangle.vertices[1], camera.focalLength);
 		CanvasPoint p3 = getCanvasIntersectionPoint(camera, triangle.vertices[2], camera.focalLength);
-
 		Shape2D triangle2D = CreateStrokedTriangle2D(CanvasTriangle(p1, p2, p3), Colour(255, 255, 255));
 		wireframe.push_back(triangle2D);
 	}
@@ -456,6 +496,13 @@ ModelTriangle TranslateTriangle(const ModelTriangle tri, const glm::vec3 t) {
 	return ModelTriangle(tri.vertices[0] + t, tri.vertices[1] + t, tri.vertices[2] + t, tri.colour);
 }
 
+ModelTriangle RotateTriangle(const ModelTriangle tri, const glm::mat3 r) {
+	return ModelTriangle(r * tri.vertices[0], r * tri.vertices[1], r * tri.vertices[2], tri.colour);
+}
+
+bool PointInsideCanvas(CanvasPoint p) {
+	return (p.x >= 0 && p.x < WIDTH) && (p.y >= 0 && p.y < HEIGHT);
+}
 std::vector<std::vector<DepthPoint>> RasterisedRender(DrawingWindow& window, const std::vector<ModelTriangle> triangles, const Camera camera) {
 	std::vector<std::vector<DepthPoint>> depthBuffer;
 	for (int y = 0; y < HEIGHT; y++) {
@@ -468,8 +515,10 @@ std::vector<std::vector<DepthPoint>> RasterisedRender(DrawingWindow& window, con
 		const CanvasPoint p1 = getCanvasIntersectionPoint(camera, triangle.vertices[0], camera.focalLength);
 		const CanvasPoint p2 = getCanvasIntersectionPoint(camera, triangle.vertices[1], camera.focalLength);
 		const CanvasPoint p3 = getCanvasIntersectionPoint(camera, triangle.vertices[2], camera.focalLength);
-		const ModelTriangle cameraSpaceTriangle = TranslateTriangle(triangle, -camera.position);
-		CreateFilledTriangle2D(CanvasTriangle(p1, p2, p3), triangle.colour, &cameraSpaceTriangle, &depthBuffer);
+		const ModelTriangle cameraSpaceTriangle = RotateTriangle(TranslateTriangle(triangle, -camera.position), camera.rotationMatrix);
+		if (PointInsideCanvas(p1) || PointInsideCanvas(p2) || PointInsideCanvas(p3)) {
+			CreateFilledTriangle2D(CanvasTriangle(p1, p2, p3), triangle.colour, &cameraSpaceTriangle, &depthBuffer);
+		}
 	}
 	return depthBuffer;
 }
@@ -525,6 +574,15 @@ bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape
 			else if (event.key.keysym.sym == SDLK_RIGHT) c.AddRotation(0, rotStep, 0);
 			else if (event.key.keysym.sym == SDLK_UP) c.AddRotation(0, 0, rotStep);
 			else if (event.key.keysym.sym == SDLK_DOWN) c.AddRotation(0, 0, -rotStep);
+
+			else if (event.key.keysym.sym == SDLK_l) c.lookAt(glm::vec3(0, 0, 0));
+			else if (event.key.keysym.sym == SDLK_o) {
+				if (c.orbiting) {
+					c.stopOrbit();
+				} else {
+					c.startOrbit(glm::vec3(0, 0, 0), 4);
+				}
+			}
 		}
 	} else if (event.type == SDL_MOUSEBUTTONDOWN) {
 		window.savePPM("output.ppm");
@@ -555,7 +613,11 @@ void run(Drawing draw) {
 						Colour c  = depthBuffer[y][x].colour;
 						window.setPixelColour(x, y, PackColour(c.red, c.green, c.blue));
 					}
-				}				
+				}
+				if (camera.orbiting) {
+					camera.orbitStep();
+				}
+				// camera.output();
 				window.renderFrame();
 			}
 			return;
