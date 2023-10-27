@@ -17,6 +17,8 @@
 #include <sys/resource.h>
 #include <math.h>
 #include <glm/gtx/string_cast.hpp>
+#include <glm/gtx/norm.hpp>
+#include <limits.h>
 
 #define WIDTH 440
 #define HEIGHT 300
@@ -461,12 +463,18 @@ struct Camera {
 	}
 };
 
-CanvasPoint getCanvasIntersectionPoint(const Camera &camera, glm::vec3 vertexPosition, float focalLength) {
+CanvasPoint getCanvasIntersectionPoint(const Camera &camera, glm::vec3 vertexPosition) {
 	// transform the vertex such that the camera is the origin
 	glm::vec3 vPos = camera.rotationMatrix * (vertexPosition - camera.position);
-	float u = (150 * focalLength * vPos.x / -vPos.z) + WIDTH / 2.0;
-	float v = (150 * focalLength * vPos.y / vPos.z) + HEIGHT / 2.0;
+	const float u = (150 * camera.focalLength * vPos.x / -vPos.z) + WIDTH / 2.0;
+	const float v = (150 * camera.focalLength * vPos.y / vPos.z) + HEIGHT / 2.0;
 	return CanvasPoint(u, v);
+}
+
+glm::vec3 CanvasPointToWorld(const Camera &camera, const float u, const float v) {
+	const float x = (u - (WIDTH / 2.0)) / 150.0;
+	const float y = (v - (HEIGHT / 2.0)) / 150.0;
+	return camera.rotationMatrix * glm::vec3(x, y, camera.focalLength);
 }
 
 
@@ -474,7 +482,7 @@ Shape2D Pointcloud(std::vector<ModelTriangle> triangles, Camera camera) {
 	std::vector<CanvasPoint> ps;
 	for (ModelTriangle triangle : triangles) {
 		for (glm::vec3 vertex : triangle.vertices) {
-			ps.push_back(getCanvasIntersectionPoint(camera, vertex, camera.focalLength));
+			ps.push_back(getCanvasIntersectionPoint(camera, vertex));
 		}
 	}
 	return { ps, Colour(255, 255, 255) };
@@ -483,9 +491,9 @@ Shape2D Pointcloud(std::vector<ModelTriangle> triangles, Camera camera) {
 std::vector<Shape2D> Wireframe(std::vector<ModelTriangle> triangles, Camera camera) {
 	std::vector<Shape2D> wireframe;
 	for (ModelTriangle triangle : triangles) {
-		CanvasPoint p1 = getCanvasIntersectionPoint(camera, triangle.vertices[0], camera.focalLength);
-		CanvasPoint p2 = getCanvasIntersectionPoint(camera, triangle.vertices[1], camera.focalLength);
-		CanvasPoint p3 = getCanvasIntersectionPoint(camera, triangle.vertices[2], camera.focalLength);
+		CanvasPoint p1 = getCanvasIntersectionPoint(camera, triangle.vertices[0]);
+		CanvasPoint p2 = getCanvasIntersectionPoint(camera, triangle.vertices[1]);
+		CanvasPoint p3 = getCanvasIntersectionPoint(camera, triangle.vertices[2]);
 		Shape2D triangle2D = CreateStrokedTriangle2D(CanvasTriangle(p1, p2, p3), Colour(255, 255, 255));
 		wireframe.push_back(triangle2D);
 	}
@@ -503,6 +511,7 @@ ModelTriangle RotateTriangle(const ModelTriangle tri, const glm::mat3 r) {
 bool PointInsideCanvas(CanvasPoint p) {
 	return (p.x >= 0 && p.x < WIDTH) && (p.y >= 0 && p.y < HEIGHT);
 }
+
 std::vector<std::vector<DepthPoint>> RasterisedRender(DrawingWindow& window, const std::vector<ModelTriangle> triangles, const Camera camera) {
 	std::vector<std::vector<DepthPoint>> depthBuffer;
 	for (int y = 0; y < HEIGHT; y++) {
@@ -512,15 +521,70 @@ std::vector<std::vector<DepthPoint>> RasterisedRender(DrawingWindow& window, con
 	}
 	for (ModelTriangle triangle : triangles) {
 		// We must maintain a depth buffer as we build the triangles
-		const CanvasPoint p1 = getCanvasIntersectionPoint(camera, triangle.vertices[0], camera.focalLength);
-		const CanvasPoint p2 = getCanvasIntersectionPoint(camera, triangle.vertices[1], camera.focalLength);
-		const CanvasPoint p3 = getCanvasIntersectionPoint(camera, triangle.vertices[2], camera.focalLength);
+		const CanvasPoint p1 = getCanvasIntersectionPoint(camera, triangle.vertices[0]);
+		const CanvasPoint p2 = getCanvasIntersectionPoint(camera, triangle.vertices[1]);
+		const CanvasPoint p3 = getCanvasIntersectionPoint(camera, triangle.vertices[2]);
 		const ModelTriangle cameraSpaceTriangle = RotateTriangle(TranslateTriangle(triangle, -camera.position), camera.rotationMatrix);
 		if (PointInsideCanvas(p1) || PointInsideCanvas(p2) || PointInsideCanvas(p3)) {
 			CreateFilledTriangle2D(CanvasTriangle(p1, p2, p3), triangle.colour, &cameraSpaceTriangle, &depthBuffer);
 		}
 	}
 	return depthBuffer;
+}
+
+struct RayCollision {
+	Colour color;
+	glm::vec3 position;
+	float distanceToCamera;
+};
+
+struct Ray {
+	glm::vec3 origin;
+	glm::vec3 direction;
+};
+
+bool TriangleHitLoc(const ModelTriangle& tri, const Ray& r, glm::vec3& loc) {
+	// Get ray intersection with the plane described by two verticies of the triangle
+	glm::vec3 normal = glm::cross(tri.vertices[1] - tri.vertices[0], tri.vertices[2] - tri.vertices[0]);
+	float d = glm::dot(tri.vertices[0], normal);
+	float n = glm::dot(normal, r.origin); // n.p_0
+	float m = glm::dot(normal, r.direction); // n.u
+	if (m == 0) 
+		return false;
+	float t = (d - n) / m; // tri = (d - n.p0) / n.u
+	loc = r.origin + (r.direction * t);
+
+	// Check that loc is inside triangle
+	float area2 = glm::length(normal);
+	glm::vec3 PC = tri.vertices[2] - loc;
+	glm::vec3 PB = tri.vertices[1] - loc;
+	glm::vec3 PA = tri.vertices[0] - loc;
+	float alpha = glm::length(glm::cross(PB, PC)) / area2;
+	float beta = glm::length(glm::cross(PC, PA)) / area2;
+	float gamma = glm::length(glm::cross(PA, PB)) / area2;	
+	return (alpha >= 0 && alpha <= 1) &&
+		   (beta  >= 0 && beta  <= 1) &&
+		   (gamma >= 0 && gamma <= 1) &&
+		   (fabs(alpha + beta + gamma - 1) <= 0.01);
+}
+
+// Returning a bool here cause someone decided we are using C++11 and therefore I can't use std::optional :(
+bool NearestRayCollision(Ray& r, const std::vector<ModelTriangle>& triangles, RayCollision& collision) {
+	RayCollision nearest = { Colour(), glm::vec3(), FLT_MAX };
+	for (ModelTriangle t : triangles) {
+		glm::vec3 loc;
+		if (TriangleHitLoc(t, r, loc)) {
+			float sqrDist = glm::length2(loc - r.origin);
+			// Check that the collision is after the start of the ray & collision is closer
+			if (glm::dot(r.direction, r.origin) > 0.0 && sqrDist < nearest.distanceToCamera) {
+				nearest = { t.colour, loc, sqrDist };
+			}
+		}
+	}
+	if (nearest.distanceToCamera == FLT_MAX)
+		return false;
+	collision = nearest;
+	return true; 
 }
 
 enum Drawing {
@@ -531,27 +595,8 @@ enum Drawing {
 	POINT_CLOUD,
 	WIRE_FRAME,
 	RASTERISED_3D,
+	RAYTRACE
 };
-
-void draw2D(DrawingWindow &window, std::vector<Shape2D> shapes, Drawing d) {
-	window.clearPixels();
-	switch (d) {
-		case GRAYSCALE_GRADIENT:
-			GrayscaleGradient(window);
-			break;
-		case TWO_D_GRADIENT:
-			TwoDGradient(window);
-			break;
-		case WITCH_SYMBOL:
-			WitchSymbol(window);
-			break;
-		default: {
-			for (Shape2D shape : shapes) {
-				DrawShape2D(window, shape);
-			}
-		}
-	}
-}
 
 bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape2D> &shapes, const Drawing d, Camera* const pCamera) {
 	if (event.type == SDL_KEYDOWN) {
@@ -593,38 +638,90 @@ bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape
 	return false;
 }
 
+void Raytrace(DrawingWindow& window, const Camera& camera, const std::vector<ModelTriangle>& triangles) {
+	for (int v = 0; v < HEIGHT; v++) {
+		for (int u = 0; u < WIDTH; u++) {
+			// first find coords in 3D
+			glm::vec3 rayV = CanvasPointToWorld(camera, u, v);
+			glm::vec3 rayP = camera.position + rayV;
+			Ray ray = { rayP, rayV };
+			RayCollision c;
+			uint32_t colour;
+			if (NearestRayCollision(ray, triangles, c))
+				colour = PackColour(c.color.red, c.color.green, c.color.green);
+			else
+				colour = PackColour(0, 0, 0);
+			window.setPixelColour(u, v, colour);
+		}
+	}
+}
+
+void DrawRasterized3D(DrawingWindow& window, Camera& camera, std::vector<ModelTriangle>& triangles) {
+	bool quit = false;
+	SDL_Event event;
+	std::vector<Shape2D> shapes;
+	while (!quit) {
+		if (window.pollForInputEvents(event)) quit = handleEvent(event, window, shapes, RASTERISED_3D, &camera);
+		window.clearPixels();
+		std::vector<std::vector<DepthPoint>> depthBuffer = RasterisedRender(window, triangles, camera);
+		for (int y = 0; y < HEIGHT; y++) {
+			for (int x = 0; x < WIDTH; x++) {
+				Colour c  = depthBuffer[y][x].colour;
+				window.setPixelColour(x, y, PackColour(c.red, c.green, c.blue));
+			}
+		}
+		if (camera.orbiting) {
+			camera.orbitStep();
+		}
+		// camera.output();
+		window.renderFrame();
+	}
+	return;
+}
+
+void draw2D(DrawingWindow &window, std::vector<Shape2D> shapes, Drawing d) {
+	window.clearPixels();
+	switch (d) {
+		case GRAYSCALE_GRADIENT:
+			GrayscaleGradient(window);
+			break;
+		case TWO_D_GRADIENT:
+			TwoDGradient(window);
+			break;
+		case WITCH_SYMBOL:
+			WitchSymbol(window);
+			break;
+		default: {
+			for (Shape2D shape : shapes) {
+				DrawShape2D(window, shape);
+			}
+		}
+	}
+}
+
 void run(Drawing draw) {
 	DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
 	SDL_Event event;
 	std::vector<Shape2D> shapes;
 	bool quit = false;
 
-	if (draw == POINT_CLOUD || draw == WIRE_FRAME || draw == RASTERISED_3D) {
+	if (draw == POINT_CLOUD || draw == WIRE_FRAME || draw == RASTERISED_3D || draw == RAYTRACE) {
 		OBJFile objs("cornell-box.obj", "objs/", 0.35);
 		std::vector<ModelTriangle> triangles = objs.GetTriangles();
 		Camera camera(glm::vec3(0.0, 0.0, 4.0), glm::vec3(0.0, 0.0, 0.0), 2.0);
-		if (draw == RASTERISED_3D) {
-			while (!quit) {
-				if (window.pollForInputEvents(event)) quit = handleEvent(event, window, shapes, draw, &camera);
-				window.clearPixels();
-				std::vector<std::vector<DepthPoint>> depthBuffer = RasterisedRender(window, triangles, camera);
-				for (int y = 0; y < HEIGHT; y++) {
-					for (int x = 0; x < WIDTH; x++) {
-						Colour c  = depthBuffer[y][x].colour;
-						window.setPixelColour(x, y, PackColour(c.red, c.green, c.blue));
-					}
-				}
-				if (camera.orbiting) {
-					camera.orbitStep();
-				}
-				// camera.output();
-				window.renderFrame();
-			}
-			return;
-		}
-		else {
-			if (draw == POINT_CLOUD) shapes.push_back(Pointcloud(triangles, camera));
-			else shapes = Wireframe(triangles, camera);
+		switch (draw) {
+			case RASTERISED_3D:
+				DrawRasterized3D(window, camera, triangles);
+				break;
+			case RAYTRACE:
+				Raytrace(window, camera, triangles);
+				break;
+			case POINT_CLOUD:
+				shapes.push_back(Pointcloud(triangles, camera));
+				break;
+			case WIRE_FRAME:
+				shapes = Wireframe(triangles, camera);
+				break;
 		}
 	}
 
@@ -642,5 +739,5 @@ int main(int argc, char *argv[]) {
 	if (setrlimit(RLIMIT_STACK, &r1) != 0)
 		std::cerr << "setrlimit returned error\n";
 	
-	run(RASTERISED_3D);
+	run(RAYTRACE);
 }

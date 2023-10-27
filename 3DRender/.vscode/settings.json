@@ -1,6 +1,7 @@
 {
     "C_Cpp.default.compilerPath": "/usr/bin/clang",
     "files.associations": {
+        "*.pl": "prolog",
         "vector": "cpp",
         "array": "cpp",
         "atomic": "cpp",
@@ -60,6 +61,7 @@
         "semaphore": "cpp",
         "stop_token": "cpp",
         "thread": "cpp",
-        "cinttypes": "cpp"
+        "cinttypes": "cpp",
+        "optional": "cpp"
     }
 }
