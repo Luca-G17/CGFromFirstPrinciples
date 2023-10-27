@@ -5,6 +5,7 @@
 - [Week 2](#week-2)
 - [Week 3](#week-3)
 - [Week 4](#week-4)
+- [Week 5](#week-5)
 
 ## Week 1 ##
 Red Noise:  
@@ -149,4 +150,76 @@ CanvasPoint getCanvasIntersectionPoint(glm::vec3 cameraPosition, glm::vec3 verte
 	return CanvasPoint(u, v);
 }
 ```
+## Week 5 ##
 
+Camera Translation + Rotation:  
+![Peek 2023-10-21 18-55](https://github.com/LucaUoB/CGRepo/assets/63655147/4447388c-efba-430d-a13d-6526e7751626)
+
+```c++
+struct Camera {
+	bool orbiting = false;
+	glm::vec3 orbitCentre;
+	float orbitRadius;
+	float orbitAngle;
+
+	glm::vec3 position;
+	glm::vec3 rotation;
+	glm::mat3 rotationMatrix;
+	float focalLength;
+
+	Camera(const glm::vec3 p, const glm::vec3 r, const float f) {
+		position = p;
+		rotation = r;
+		focalLength = f;
+		rotationMatrix = RotationMatrix(rotation.x, rotation.y, rotation.z);
+	}
+
+	// X = Roll, Y = Yaw, Z = Pitch
+	void AddRotation(float x, float y, float z) {
+		rotation.x += x;
+		rotation.y += y;
+		rotation.z += z;
+		rotationMatrix = RotationMatrix(rotation.x, rotation.y, rotation.z);
+		std::cout << glm::to_string(rotation) << std::endl;
+	}
+
+	void AddTranslation(float x, float y, float z) {
+		glm::vec3 delta = RotationMatrix(-rotation.x, -rotation.y, -rotation.z) * glm::vec3(x, y, z);
+		position += delta;
+	}
+
+	void lookAt(glm::vec3 p) {
+		glm::vec3 cameraToP = p - position;
+		float pitch = atan2(-cameraToP.y, fabs(cameraToP.z));
+		float yaw = atan2(cameraToP.x, -cameraToP.z);
+
+		this->rotation = { 0, yaw, pitch };
+		rotationMatrix = RotationMatrix(rotation.x, rotation.y, rotation.z);
+	}
+
+	void startOrbit(glm::vec3 centre, float radius) {
+		position = centre;
+		position.z += radius;
+		orbitRadius = radius;
+		rotation = glm::vec3(0, 0, 0);
+		rotationMatrix = RotationMatrix(0, 0, 0);
+		orbitAngle = 0;
+		orbiting = true;
+	}
+
+	void stopOrbit() {
+		orbiting = false;
+	}
+
+	void orbitStep() {
+		orbitAngle += M_PI / 180; // Add 1 degree
+		position.x = orbitRadius * sin(orbitAngle) + orbitCentre.x;
+		position.z = orbitRadius * cos(orbitAngle) + orbitCentre.z;
+		lookAt(orbitCentre);
+	}
+
+	void output() {
+		std::cout << "Rotation: " << glm::to_string(rotation) << " Position: " << glm::to_string(position) << std::endl;
+	}
+};
+```
