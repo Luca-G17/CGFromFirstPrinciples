@@ -19,6 +19,7 @@
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtx/norm.hpp>
 #include <limits.h>
+#include <chrono>
 
 #define WIDTH 440
 #define HEIGHT 300
@@ -473,8 +474,8 @@ CanvasPoint getCanvasIntersectionPoint(const Camera &camera, glm::vec3 vertexPos
 
 glm::vec3 CanvasPointToWorld(const Camera &camera, const float u, const float v) {
 	const float x = (u - (WIDTH / 2.0)) / 150.0;
-	const float y = (v - (HEIGHT / 2.0)) / 150.0;
-	return camera.rotationMatrix * glm::vec3(x, y, camera.focalLength);
+	const float y = -(v - (HEIGHT / 2.0)) / 150.0;
+	return camera.rotationMatrix * glm::vec3(x, y, -camera.focalLength);
 }
 
 
@@ -576,7 +577,8 @@ bool NearestRayCollision(Ray& r, const std::vector<ModelTriangle>& triangles, Ra
 		if (TriangleHitLoc(t, r, loc)) {
 			float sqrDist = glm::length2(loc - r.origin);
 			// Check that the collision is after the start of the ray & collision is closer
-			if (glm::dot(r.direction, r.origin) > 0.0 && sqrDist < nearest.distanceToCamera) {
+			// This is negative because for some reason Z into the scene is negative
+			if (glm::dot(r.direction, r.origin) < 0.0 && sqrDist < nearest.distanceToCamera) {
 				nearest = { t.colour, loc, sqrDist };
 			}
 		}
@@ -639,20 +641,37 @@ bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape
 }
 
 void Raytrace(DrawingWindow& window, const Camera& camera, const std::vector<ModelTriangle>& triangles) {
-	for (int v = 0; v < HEIGHT; v++) {
-		for (int u = 0; u < WIDTH; u++) {
-			// first find coords in 3D
-			glm::vec3 rayV = CanvasPointToWorld(camera, u, v);
-			glm::vec3 rayP = camera.position + rayV;
-			Ray ray = { rayP, rayV };
-			RayCollision c;
-			uint32_t colour;
-			if (NearestRayCollision(ray, triangles, c))
-				colour = PackColour(c.color.red, c.color.green, c.color.green);
-			else
-				colour = PackColour(0, 0, 0);
-			window.setPixelColour(u, v, colour);
+	bool quit = false;
+	SDL_Event event;
+	std::vector<Shape2D> shapes;
+	std::cout << "test\n" << std::endl;
+	while (true) {
+		uint64_t start = std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::system_clock::now().time_since_epoch())
+			.count();
+		
+		if (window.pollForInputEvents(event)) quit = handleEvent(event, window, shapes, RAYTRACE, nullptr);
+		window.clearPixels();
+		for (int v = 0; v < HEIGHT; v++) {
+			for (int u = 0; u < WIDTH; u++) {
+				// first find coords in 3D
+				glm::vec3 rayV = CanvasPointToWorld(camera, u, v);
+				glm::vec3 rayP = camera.position + rayV;
+				Ray ray = { rayP, rayV };
+				RayCollision c;
+				uint32_t colour;
+				if (NearestRayCollision(ray, triangles, c))
+					colour = PackColour(c.color.red, c.color.green, c.color.blue);
+				else
+					colour = PackColour(0, 0, 0);
+				window.setPixelColour(u, v, colour);
+			}
 		}
+		uint64_t end = std::chrono::duration_cast<std::chrono::milliseconds>(
+			std::chrono::system_clock::now().time_since_epoch())
+			.count();
+		std::cout << "Frame Rate: " << 1.0 / ((end - start) * 1000) << "f/s\r" << std::flush;
+		window.renderFrame();
 	}
 }
 
