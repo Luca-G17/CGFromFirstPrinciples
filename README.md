@@ -1,11 +1,12 @@
 # CGRepo
 
 ## Lab Week:
-- [Week 1](#week-1)
-- [Week 2](#week-2)
-- [Week 3](#week-3)
-- [Week 4](#week-4)
-- [Week 5](#week-5)
+- [Week 1 - Red Noise](#week-1)
+- [Week 2 - Interpolation](#week-2)
+- [Week 3 - Basic Geometry](#week-3)
+- [Week 4 - 3D Rendering](#week-4)
+- [Week 5 - Camera Position/Orientation](#week-5)
+- [Week 6 - Raytracing](#week-6)
 
 ## Week 1 ##
 Red Noise:  
@@ -222,4 +223,69 @@ struct Camera {
 		std::cout << "Rotation: " << glm::to_string(rotation) << " Position: " << glm::to_string(position) << std::endl;
 	}
 };
+```
+
+## Week 6 ##
+
+Raytracing:  
+![image](https://github.com/LucaUoB/CGRepo/assets/63655147/42318483-8b81-4d19-ba56-9c2c910d3639)  
+
+```c++
+bool TriangleHitLoc(const ModelTriangle& tri, const Ray& r, glm::vec3& loc) {
+	// Get ray intersection with the plane described by two verticies of the triangle
+	glm::vec3 normal = glm::cross(tri.vertices[1] - tri.vertices[0], tri.vertices[2] - tri.vertices[0]);
+	float d = glm::dot(tri.vertices[0], normal);
+	float n = glm::dot(normal, r.origin); // n.p_0
+	float m = glm::dot(normal, r.direction); // n.u
+	if (m == 0) 
+		return false;
+	float t = (d - n) / m; // tri = (d - n.p0) / n.u
+	loc = r.origin + (r.direction * t);
+
+	// Check that loc is inside triangle
+	float area2 = glm::length(normal);
+	glm::vec3 PC = tri.vertices[2] - loc;
+	glm::vec3 PB = tri.vertices[1] - loc;
+	glm::vec3 PA = tri.vertices[0] - loc;
+	float alpha = glm::length(glm::cross(PB, PC)) / area2;
+	float beta = glm::length(glm::cross(PC, PA)) / area2;
+	float gamma = glm::length(glm::cross(PA, PB)) / area2;	
+	return (alpha >= 0 && alpha <= 1) &&
+		   (beta  >= 0 && beta  <= 1) &&
+		   (gamma >= 0 && gamma <= 1) &&
+		   (fabs(alpha + beta + gamma - 1) <= 0.01);
+}
+
+// Returning a bool here cause someone decided we are using C++11 and therefore I can't use std::optional :(
+bool NearestRayCollision(Ray& r, const std::vector<ModelTriangle>& triangles, RayCollision& collision) {
+	RayCollision nearest = { Colour(), glm::vec3(), glm::vec3(), FLT_MAX };
+	for (const ModelTriangle& t : triangles) {
+		glm::vec3 loc;
+		if (TriangleHitLoc(t, r, loc)) {
+			float sqrDist = glm::length2(loc - r.origin);
+			// Check that the collision is after the start of the ray & collision is closer
+			if (glm::dot(r.direction, loc - r.origin) > 0.0 && sqrDist < nearest.distanceToCamera) {
+				glm::vec3 triNorm = glm::normalize(glm::cross(t.vertices[0] - t.vertices[1], t.vertices[0] - t.vertices[2]));
+				if (glm::dot(triNorm, r.direction) > 0.0)
+					triNorm *= -1;
+				nearest = { t.colour, loc, triNorm, sqrDist };
+			}
+		}
+	}
+	if (nearest.distanceToCamera == FLT_MAX)
+		return false;
+	collision = nearest;
+	return true; 
+}
+
+bool InShadow(const glm::vec3& p, const glm::vec3& norm, const std::vector<ModelTriangle>& triangles, const std::vector<glm::vec3> lights) {
+	for (const glm::vec3& light : lights) {
+		glm::vec3 v = light - p;
+		Ray r = { p + norm * 0.001f, v };
+		RayCollision c;
+		if (!NearestRayCollision(r, triangles, c))
+			return false;
+	}
+	return true;
+}
 ```
