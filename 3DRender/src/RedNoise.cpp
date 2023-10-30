@@ -39,6 +39,14 @@ struct DepthPoint {
 	float depth;
 };
 
+Colour ScaleColour(Colour c, float s) {
+	return Colour(
+		fmax(fmin(c.red * s, 255), 0),
+		fmax(fmin(c.green * s, 255), 0),
+		fmax(fmin(c.blue * s, 255), 0)
+		);
+}
+
 std::vector<std::string> Split(std::string str, std::string delimiter) {
 	size_t pos = 0;
 	std::string token;
@@ -536,6 +544,7 @@ std::vector<std::vector<DepthPoint>> RasterisedRender(DrawingWindow& window, con
 struct RayCollision {
 	Colour color;
 	glm::vec3 position;
+	glm::vec3 normal;
 	float distanceToCamera;
 };
 
@@ -571,15 +580,17 @@ bool TriangleHitLoc(const ModelTriangle& tri, const Ray& r, glm::vec3& loc) {
 
 // Returning a bool here cause someone decided we are using C++11 and therefore I can't use std::optional :(
 bool NearestRayCollision(Ray& r, const std::vector<ModelTriangle>& triangles, RayCollision& collision) {
-	RayCollision nearest = { Colour(), glm::vec3(), FLT_MAX };
+	RayCollision nearest = { Colour(), glm::vec3(), glm::vec3(), FLT_MAX };
 	for (ModelTriangle t : triangles) {
 		glm::vec3 loc;
 		if (TriangleHitLoc(t, r, loc)) {
 			float sqrDist = glm::length2(loc - r.origin);
 			// Check that the collision is after the start of the ray & collision is closer
-			// This is negative because for some reason Z into the scene is negative
-			if (glm::dot(r.direction, r.origin) < 0.0 && sqrDist < nearest.distanceToCamera) {
-				nearest = { t.colour, loc, sqrDist };
+			if (glm::dot(r.direction, loc - r.origin) > 0.0 && sqrDist < nearest.distanceToCamera) {
+				glm::vec3 triNorm = glm::cross(t.vertices[0] - t.vertices[1], t.vertices[0] - t.vertices[2]);
+				if (glm::dot(triNorm, r.direction) > 0.0)
+					triNorm *= -1;
+				nearest = { t.colour, loc, triNorm, sqrDist };
 			}
 		}
 	}
@@ -640,11 +651,24 @@ bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape
 	return false;
 }
 
+bool InShadow(const glm::vec3& p, const glm::vec3& norm, const std::vector<ModelTriangle>& triangles, const std::vector<glm::vec3> lights) {
+	for (const glm::vec3& light : lights) {
+		glm::vec3 v = light - p;
+		Ray r = { p + (norm * 0.005f) , v};
+		RayCollision c;
+		if (!NearestRayCollision(r, triangles, c)) {
+			return false; 
+		}
+	}
+	return true;
+}
+
 void Raytrace(DrawingWindow& window, const Camera& camera, const std::vector<ModelTriangle>& triangles) {
 	bool quit = false;
 	SDL_Event event;
 	std::vector<Shape2D> shapes;
-	std::cout << "test\n" << std::endl;
+
+	std::vector<glm::vec3> lights = {{ 0.2, 0, 2 }};
 	while (true) {
 		uint64_t start = std::chrono::duration_cast<std::chrono::milliseconds>(
 			std::chrono::system_clock::now().time_since_epoch())
@@ -659,19 +683,22 @@ void Raytrace(DrawingWindow& window, const Camera& camera, const std::vector<Mod
 				glm::vec3 rayP = camera.position + rayV;
 				Ray ray = { rayP, rayV };
 				RayCollision c;
-				uint32_t colour;
-				if (NearestRayCollision(ray, triangles, c))
-					colour = PackColour(c.color.red, c.color.green, c.color.blue);
+				Colour colour;
+				if (NearestRayCollision(ray, triangles, c)) {
+					colour = c.color;
+					if (InShadow(c.position, c.normal, triangles, lights))
+						colour = ScaleColour(colour, 0.2);
+				}
 				else
-					colour = PackColour(0, 0, 0);
-				window.setPixelColour(u, v, colour);
+					colour = Colour(0, 0, 0);
+				window.setPixelColour(u, v, PackColour(colour.red, colour.green, colour.blue));
 			}
 		}
+		window.renderFrame();
 		uint64_t end = std::chrono::duration_cast<std::chrono::milliseconds>(
 			std::chrono::system_clock::now().time_since_epoch())
 			.count();
-		std::cout << "Frame Rate: " << 1.0 / ((end - start) * 1000) << "f/s\r" << std::flush;
-		window.renderFrame();
+		std::cout << "Frame Rate: " << 1.0 / ((end - start) / 1000) << "f/s\r" << std::flush;
 	}
 }
 

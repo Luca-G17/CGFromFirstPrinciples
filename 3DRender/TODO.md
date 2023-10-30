@@ -3,6 +3,7 @@
 - [ ] Add raytracing
     - [X] Ray-triangle intersection
     - [X] Validate intersection
+    - [ ] Occlusion Shadows
     - [ ] Sort out acne
     - [ ] Fix colours
     - [ ] Fix orientation
