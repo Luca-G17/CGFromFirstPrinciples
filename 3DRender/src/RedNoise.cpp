@@ -23,6 +23,7 @@
 
 #define WIDTH 440
 #define HEIGHT 300
+#define FPS_CAP 60
 
 struct Shape2D {
 	std::vector<CanvasPoint> points;
@@ -429,7 +430,6 @@ struct Camera {
 		rotation.y += y;
 		rotation.z += z;
 		rotationMatrix = RotationMatrix(rotation.x, rotation.y, rotation.z);
-		std::cout << glm::to_string(rotation) << std::endl;
 	}
 
 	void AddTranslation(float x, float y, float z) {
@@ -483,7 +483,7 @@ CanvasPoint getCanvasIntersectionPoint(const Camera &camera, glm::vec3 vertexPos
 glm::vec3 CanvasPointToWorld(const Camera &camera, const float u, const float v) {
 	const float x = (u - (WIDTH / 2.0)) / 150.0;
 	const float y = -(v - (HEIGHT / 2.0)) / 150.0;
-	return camera.rotationMatrix * glm::vec3(x, y, -camera.focalLength);
+	return glm::transpose(camera.rotationMatrix) * (glm::vec3(x, y, -camera.focalLength));
 }
 
 
@@ -581,13 +581,13 @@ bool TriangleHitLoc(const ModelTriangle& tri, const Ray& r, glm::vec3& loc) {
 // Returning a bool here cause someone decided we are using C++11 and therefore I can't use std::optional :(
 bool NearestRayCollision(Ray& r, const std::vector<ModelTriangle>& triangles, RayCollision& collision) {
 	RayCollision nearest = { Colour(), glm::vec3(), glm::vec3(), FLT_MAX };
-	for (ModelTriangle t : triangles) {
+	for (const ModelTriangle& t : triangles) {
 		glm::vec3 loc;
 		if (TriangleHitLoc(t, r, loc)) {
 			float sqrDist = glm::length2(loc - r.origin);
 			// Check that the collision is after the start of the ray & collision is closer
 			if (glm::dot(r.direction, loc - r.origin) > 0.0 && sqrDist < nearest.distanceToCamera) {
-				glm::vec3 triNorm = glm::cross(t.vertices[0] - t.vertices[1], t.vertices[0] - t.vertices[2]);
+				glm::vec3 triNorm = glm::normalize(glm::cross(t.vertices[0] - t.vertices[1], t.vertices[0] - t.vertices[2]));
 				if (glm::dot(triNorm, r.direction) > 0.0)
 					triNorm *= -1;
 				nearest = { t.colour, loc, triNorm, sqrDist };
@@ -598,6 +598,39 @@ bool NearestRayCollision(Ray& r, const std::vector<ModelTriangle>& triangles, Ra
 		return false;
 	collision = nearest;
 	return true; 
+}
+
+bool InShadow(const glm::vec3& p, const glm::vec3& norm, const std::vector<ModelTriangle>& triangles, const std::vector<glm::vec3> lights) {
+	for (const glm::vec3& light : lights) {
+		glm::vec3 v = light - p;
+		Ray r = { p + norm * 0.001f, v };
+		RayCollision c;
+		if (!NearestRayCollision(r, triangles, c))
+			return false;
+	}
+	return true;
+}
+
+void Raytrace(DrawingWindow& window, const Camera& camera, const std::vector<ModelTriangle>& triangles) {
+	std::vector<glm::vec3> lights = {{ -0.2, 0, 2 }};
+	for (int v = 0; v < HEIGHT; v++) {
+		for (int u = 0; u < WIDTH; u++) {
+			// first find coords in 3D
+			glm::vec3 rayV = CanvasPointToWorld(camera, u, v);
+			glm::vec3 rayP = rayV + camera.position;
+			Ray ray = { rayP, rayV };
+			RayCollision c;
+			Colour colour;
+			if (NearestRayCollision(ray, triangles, c)) {
+				colour = c.color;
+				if (InShadow(c.position, c.normal, triangles, lights))
+					colour = ScaleColour(colour, 0.2);
+			}
+			else
+				colour = Colour(0, 0, 0);
+			window.setPixelColour(u, v, PackColour(colour.red, colour.green, colour.blue));
+		}
+	}
 }
 
 enum Drawing {
@@ -611,7 +644,8 @@ enum Drawing {
 	RAYTRACE
 };
 
-bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape2D> &shapes, const Drawing d, Camera* const pCamera) {
+bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape2D> &shapes, Drawing& d, Camera* const pCamera) {
+	Drawing Drawings3D[] = { POINT_CLOUD, WIRE_FRAME, RASTERISED_3D, RAYTRACE };
 	if (event.type == SDL_KEYDOWN) {
 	 	if (event.key.keysym.sym == SDLK_u && d == RANDOM_TRIANGLES) AddRandomTriangle(false, shapes);
 		else if (event.key.keysym.sym == SDLK_f && d == RANDOM_TRIANGLES) AddRandomTriangle(true, shapes);
@@ -620,12 +654,12 @@ bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape
 			constexpr float step = 0.1;
 			constexpr float rotStep = M_PI / 180;
 			// Translations
-			if (event.key.keysym.sym == SDLK_w && d == RASTERISED_3D) c.AddTranslation(0, 0, -step);
-			else if (event.key.keysym.sym == SDLK_s && d == RASTERISED_3D) c.AddTranslation(0, 0, step);
-			else if (event.key.keysym.sym == SDLK_a && d == RASTERISED_3D) c.AddTranslation(-step, 0, 0);
-			else if (event.key.keysym.sym == SDLK_d && d == RASTERISED_3D) c.AddTranslation(step, 0, 0);
-			else if (event.key.keysym.sym == SDLK_SPACE && d == RASTERISED_3D) c.AddTranslation(0, step, 0);
-			else if (event.key.keysym.sym == SDLK_c && d == RASTERISED_3D) c.AddTranslation(0, -step, 0);
+			if (event.key.keysym.sym == SDLK_w) c.AddTranslation(0, 0, -step);
+			else if (event.key.keysym.sym == SDLK_s) c.AddTranslation(0, 0, step);
+			else if (event.key.keysym.sym == SDLK_a) c.AddTranslation(-step, 0, 0);
+			else if (event.key.keysym.sym == SDLK_d) c.AddTranslation(step, 0, 0);
+			else if (event.key.keysym.sym == SDLK_SPACE) c.AddTranslation(0, step, 0);
+			else if (event.key.keysym.sym == SDLK_c) c.AddTranslation(0, -step, 0);
 
 			// Rotations
 			else if (event.key.keysym.sym == SDLK_LEFT) c.AddRotation(0, -rotStep, 0);
@@ -641,6 +675,14 @@ bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape
 					c.startOrbit(glm::vec3(0, 0, 0), 4);
 				}
 			}
+			else if (event.key.keysym.sym == SDLK_q) {
+				for (int i = 0; i < 4; i++) {
+					if (Drawings3D[i] == d) {
+						d = Drawings3D[(i + 1) % 4];
+						break;
+					}
+				}
+			}
 		}
 	} else if (event.type == SDL_MOUSEBUTTONDOWN) {
 		window.savePPM("output.ppm");
@@ -651,82 +693,17 @@ bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape
 	return false;
 }
 
-bool InShadow(const glm::vec3& p, const glm::vec3& norm, const std::vector<ModelTriangle>& triangles, const std::vector<glm::vec3> lights) {
-	for (const glm::vec3& light : lights) {
-		glm::vec3 v = light - p;
-		Ray r = { p + (norm * 0.005f) , v};
-		RayCollision c;
-		if (!NearestRayCollision(r, triangles, c)) {
-			return false; 
-		}
-	}
-	return true;
-}
-
-void Raytrace(DrawingWindow& window, const Camera& camera, const std::vector<ModelTriangle>& triangles) {
-	bool quit = false;
-	SDL_Event event;
-	std::vector<Shape2D> shapes;
-
-	std::vector<glm::vec3> lights = {{ 0.2, 0, 2 }};
-	while (true) {
-		uint64_t start = std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::system_clock::now().time_since_epoch())
-			.count();
-		
-		if (window.pollForInputEvents(event)) quit = handleEvent(event, window, shapes, RAYTRACE, nullptr);
-		window.clearPixels();
-		for (int v = 0; v < HEIGHT; v++) {
-			for (int u = 0; u < WIDTH; u++) {
-				// first find coords in 3D
-				glm::vec3 rayV = CanvasPointToWorld(camera, u, v);
-				glm::vec3 rayP = camera.position + rayV;
-				Ray ray = { rayP, rayV };
-				RayCollision c;
-				Colour colour;
-				if (NearestRayCollision(ray, triangles, c)) {
-					colour = c.color;
-					if (InShadow(c.position, c.normal, triangles, lights))
-						colour = ScaleColour(colour, 0.2);
-				}
-				else
-					colour = Colour(0, 0, 0);
-				window.setPixelColour(u, v, PackColour(colour.red, colour.green, colour.blue));
-			}
-		}
-		window.renderFrame();
-		uint64_t end = std::chrono::duration_cast<std::chrono::milliseconds>(
-			std::chrono::system_clock::now().time_since_epoch())
-			.count();
-		std::cout << "Frame Rate: " << 1.0 / ((end - start) / 1000) << "f/s\r" << std::flush;
-	}
-}
-
 void DrawRasterized3D(DrawingWindow& window, Camera& camera, std::vector<ModelTriangle>& triangles) {
-	bool quit = false;
-	SDL_Event event;
-	std::vector<Shape2D> shapes;
-	while (!quit) {
-		if (window.pollForInputEvents(event)) quit = handleEvent(event, window, shapes, RASTERISED_3D, &camera);
-		window.clearPixels();
-		std::vector<std::vector<DepthPoint>> depthBuffer = RasterisedRender(window, triangles, camera);
-		for (int y = 0; y < HEIGHT; y++) {
-			for (int x = 0; x < WIDTH; x++) {
-				Colour c  = depthBuffer[y][x].colour;
-				window.setPixelColour(x, y, PackColour(c.red, c.green, c.blue));
-			}
+	std::vector<std::vector<DepthPoint>> depthBuffer = RasterisedRender(window, triangles, camera);
+	for (int y = 0; y < HEIGHT; y++) {
+		for (int x = 0; x < WIDTH; x++) {
+			Colour c  = depthBuffer[y][x].colour;
+			window.setPixelColour(x, y, PackColour(c.red, c.green, c.blue));
 		}
-		if (camera.orbiting) {
-			camera.orbitStep();
-		}
-		// camera.output();
-		window.renderFrame();
 	}
-	return;
 }
 
 void draw2D(DrawingWindow &window, std::vector<Shape2D> shapes, Drawing d) {
-	window.clearPixels();
 	switch (d) {
 		case GRAYSCALE_GRADIENT:
 			GrayscaleGradient(window);
@@ -749,41 +726,51 @@ void run(Drawing draw) {
 	DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
 	SDL_Event event;
 	std::vector<Shape2D> shapes;
-	bool quit = false;
-
+	Camera *camera = nullptr;
+	std::vector<ModelTriangle> triangles;
 	if (draw == POINT_CLOUD || draw == WIRE_FRAME || draw == RASTERISED_3D || draw == RAYTRACE) {
 		OBJFile objs("cornell-box.obj", "objs/", 0.35);
-		std::vector<ModelTriangle> triangles = objs.GetTriangles();
-		Camera camera(glm::vec3(0.0, 0.0, 4.0), glm::vec3(0.0, 0.0, 0.0), 2.0);
-		switch (draw) {
-			case RASTERISED_3D:
-				DrawRasterized3D(window, camera, triangles);
-				break;
-			case RAYTRACE:
-				Raytrace(window, camera, triangles);
-				break;
-			case POINT_CLOUD:
-				shapes.push_back(Pointcloud(triangles, camera));
-				break;
-			case WIRE_FRAME:
-				shapes = Wireframe(triangles, camera);
-				break;
-		}
+		triangles = objs.GetTriangles();
+		camera = new Camera(glm::vec3(0.0, 0.0, 4.0), glm::vec3(0.0, 0.0, 0.0), 2.0);
 	}
 
-	while (!quit) {
-		if (window.pollForInputEvents(event)) quit = handleEvent(event, window, shapes, draw, nullptr);
-		draw2D(window, shapes, draw);
+	while (true) {
+		const uint64_t start = SDL_GetPerformanceCounter();
+		if (window.pollForInputEvents(event)) handleEvent(event, window, shapes, draw, camera);
+		window.clearPixels();
+		switch (draw) {
+			case RASTERISED_3D:
+				DrawRasterized3D(window, *camera, triangles);
+				break;
+			case RAYTRACE:
+				Raytrace(window, *camera, triangles);
+				break;
+			case POINT_CLOUD:
+				shapes = std::vector<Shape2D> { Pointcloud(triangles, *camera) };
+				draw2D(window, shapes, draw);
+				break;
+			case WIRE_FRAME:
+				shapes = Wireframe(triangles, *camera);
+				draw2D(window, shapes, draw);
+				break;
+			default:
+				draw2D(window, shapes, draw);
+		}
+		if (camera && camera->orbiting) {
+			camera->orbitStep();
+		}
 		window.renderFrame();
+		uint64_t end = SDL_GetPerformanceCounter();
+		float elapsed = (end - start) / (float)SDL_GetPerformanceFrequency() * 1000.0f;
+		SDL_Delay(int(fmax((1.0f / FPS_CAP) * 1000.0f - elapsed, 0)));
+
+		end = SDL_GetPerformanceCounter();
+		elapsed = (end - start) / (float)SDL_GetPerformanceFrequency() * 1000.0f;
+		std::cout << "FPS=" <<  1.0f / (elapsed / 1000.0f) << std::endl; 
 	}
+	delete camera;
 }
 
 int main(int argc, char *argv[]) {
-	constexpr rlim_t stackSize = 16 * 1024 * 1024;
-	struct rlimit r1;
-	r1.rlim_cur = stackSize;
-	if (setrlimit(RLIMIT_STACK, &r1) != 0)
-		std::cerr << "setrlimit returned error\n";
-	
 	run(RAYTRACE);
 }
