@@ -7,18 +7,15 @@
 #include <glm/glm.hpp>
 #include <cmath>
 #include <Colour.h>
-#include <CanvasTriangle.h>
 #include <TextureMap.h>
 #include <iostream>
-#include <fstream>
 #include <sstream>
 #include <map>
 #include <ModelTriangle.h>
-#include <sys/resource.h>
-#include <math.h>
 #include <glm/gtx/string_cast.hpp>
 #include <glm/gtx/norm.hpp>
-#include <limits.h>
+#include <filesystem>
+#include <sys/stat.h>
 #include <chrono>
 
 #define WIDTH 440
@@ -48,6 +45,14 @@ Colour ScaleColour(Colour c, float s) {
 		);
 }
 
+Colour AddColours(Colour c0, Colour c1) {
+	return Colour(
+		fmax(fmin(c0.red + c1.red, 255), 0),
+		fmax(fmin(c0.green + c1.green, 255), 0),
+		fmax(fmin(c0.blue + c1.blue, 255), 0)
+	);
+}
+
 std::vector<std::string> Split(std::string str, std::string delimiter) {
 	size_t pos = 0;
 	std::string token;
@@ -68,67 +73,138 @@ void RemoveChar(std::string str, char c) {
 }
 
 struct Triangle {
-	ModelTriangle model;
-	std::vector<glm::vec3> vertexNormals = {
-		glm::vec3(0, 0, 0),
-		glm::vec3(0, 0, 0),
-		glm::vec3(0, 0, 0)
-	};
+	std::vector<size_t> vertices;
+	glm::vec3 normal;
+	std::pair<glm::vec3, glm::vec3> bbox;
+
+	Triangle(size_t v0, size_t v1, size_t v2, glm::vec3 normal) {
+		this->vertices.push_back(v0);
+		this->vertices.push_back(v1);
+		this->vertices.push_back(v2);
+		this->normal = normal;
+	}
 };
 
-int TriangleContainsVertex(const Triangle& t, const glm::vec3& v) {
-	for (size_t i = 0; i < t.model.vertices.size(); i++) {
-		if (t.model.vertices[i] == v)
-			return i;
+struct Mesh {
+	std::vector<Triangle> triangles;
+	std::vector<glm::vec3> vertices;
+	std::vector<glm::vec3> vertexNormals;
+	Colour colour;
+	double smoothness;
+	double refractiveIndex;
+	double transparancy;
+
+	const glm::vec3& GetVertex(size_t t, size_t v) const {
+		return vertices[triangles[t].vertices[v]];
 	}
-	return -1;
-}
+
+	const glm::vec3& GetVertexNormal(size_t t, size_t v) const {
+		return vertexNormals[triangles[t].vertices[v]];
+	}
+
+	const Colour GetColour() const {
+		return colour;
+	}
+};
 
 struct VertexNormal {
 	glm::vec3 total;
 	int n;
-	glm::vec3 v;
+	glm::vec3 vertex;
 };
 
+double vec3At(glm::vec3& v, size_t axis) {
+	if (axis == 0) return v.x;
+	if (axis == 1) return v.y;
+	return v.z;
+}
+
+void vec3SetAt(glm::vec3& v, size_t axis, double d) {
+	switch (axis)
+	{
+		case 0:
+			v.x = d;
+			break;
+		case 1:
+			v.y = d;
+			break;
+		case 2:
+			v.z = d;
+			break;
+		default:
+			break;
+	}
+}
+
+// Mesh Container
+// Material Properties:
+// 		- Smoothness: 		0 = Diffuse, 1 = Reflective
+//  	- Refractive Index: 0 = No Refraction
+// 		- Transparancy: 	0 = Opaque, 1 = Transparent
 struct OBJ {
-	std::vector<Triangle> triangles;
+	Mesh mesh;
 	std::string name;
 	OBJ(std::vector<glm::vec3> coords, std::vector<std::vector<int>> faces, std::string name, Colour material) : 
 			name(name) {
+		mesh.colour = material;
+		mesh.vertices = coords;
+		mesh.smoothness = 0;
+		mesh.refractiveIndex = 1;
+		if (name == "short_box") {
+			mesh.smoothness = 0.0;
+			mesh.refractiveIndex = 1.000001;
+			mesh.transparancy = 1;
+		}
 		for (std::vector<int> face : faces) {
-			Triangle t;
-			t.model = ModelTriangle(coords[face[0] - 1], coords[face[1] - 1], coords[face[2] - 1], material);
-			t.model.normal = glm::normalize(glm::cross(t.model.vertices[0] - t.model.vertices[1], t.model.vertices[0] - t.model.vertices[2]));
-			triangles.push_back(t);
+			glm::vec3 normal = glm::normalize(glm::cross(coords[face[0] - 1] - coords[face[1] - 1], coords[face[0] - 1] - coords[face[2] - 1]));
+			Triangle t(face[0] - 1, face[1] - 1, face[2] - 1, normal);
+
+			glm::vec3 min(FLT_MAX, FLT_MAX, FLT_MAX);
+			glm::vec3 max(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+			for (size_t v : t.vertices) {
+				for (size_t axis = 0; axis < 3; axis++) {
+					vec3SetAt(min, axis, fmin(vec3At(min, axis), vec3At(coords[v], axis)));
+					vec3SetAt(max, axis, fmax(vec3At(max, axis), vec3At(coords[v], axis)));
+				}
+			}
+			t.bbox = std::make_pair(min, max);
+			mesh.triangles.push_back(t);
 		}
 
 		std::vector<VertexNormal> vertexNormals;
-		for (Triangle t : triangles) {
-			for (glm::vec3 v : t.model.vertices) {
+		for (size_t t = 0; t < mesh.triangles.size(); t++) {
+			glm::vec3& faceNormal = mesh.triangles[t].normal; 
+			for (size_t v = 0; v < 3; v++) {
+				const glm::vec3& vertex = mesh.GetVertex(t, v);
+				if (mesh.triangles[t].vertices[v] == 5) {
+					int x = 0;
+				}
 				// First check if v is in vertexNormals, if not then we add it with the current face normal
-
 				// If v is in vertexNormals then take the dot product of the current vertex normal and v, if its negative, negate v and add to vertex normals
 				bool found = false;
 				for (VertexNormal& vn : vertexNormals) {
-					if (vn.v == v) {
-						if (glm::dot(vn.total, v) < 0)
-							v *= -1;
-						vn.total += v;
+					if (vn.vertex == vertex) {
+						if (glm::dot(vn.total, faceNormal) < 0)
+							faceNormal *= -1;
+						vn.total += faceNormal;
+						vn.n++;
 						found = true;
 						break;
 					}
 				}
 				if (!found) {
-					VertexNormal vn = {t.model.normal, 1, v};
+					vertexNormals.push_back({ faceNormal, 1, vertex });
 				}
 			}
 		}
 		for (VertexNormal& vn : vertexNormals) {
 			vn.total = vn.total * (1.0f / vn.n);
-			for (Triangle t : triangles) {
-				int index = TriangleContainsVertex(t, vn.v);
-				if (index != -1) {
-					t.vertexNormals.assign(index, vn.total);
+		}
+		for (size_t v = 0; v < mesh.vertices.size(); v++) {
+			for (VertexNormal& vn : vertexNormals) {
+				if (mesh.vertices[v] == vn.vertex) {
+					mesh.vertexNormals.push_back(glm::normalize(vn.total));
+					break;
 				}
 			}
 		}
@@ -143,7 +219,7 @@ struct OBJFile {
 		std::ifstream File(objfolder + "/" + filename);
 		std::string line;
 		if (File.is_open()) {
-			std::string matfilename; 
+			std::string matfilename;
 			getline(File, line);
 			matfilename = Split(line, " ")[1];
 
@@ -216,15 +292,60 @@ struct OBJFile {
 		*/
 	}
 
-	std::vector<Triangle> GetTriangles() {
-		std::vector<Triangle> triangles;
+	std::vector<Mesh> GetMeshes() {
+		std::vector<Mesh> meshes;
 		for (OBJ obj : objects) {
-			for (Triangle triangle : obj.triangles)
-				triangles.push_back(triangle);
+				meshes.push_back(obj.mesh);
 		}
-		return triangles;
+		return meshes;
 	}
 };
+
+Colour LerpColour(Colour c0, Colour c1, double a) {
+	// I wish Colour had operator overloading :(
+	int red = c0.red + (c1.red - c0.red) * a;
+	int green = c0.green + (c1.green - c0.green) * a;
+	int blue = c0.blue + (c1.blue - c0.blue) * a;
+	return Colour(red, green, blue);
+}
+
+std::vector<float> InterpolateSingleFloats(const float from, const float to, const int steps) {
+	if (steps <= 1) {
+		return { from };
+	}
+	const float step = (to - from) / (steps - 1); 
+	std::vector<float> results;
+	for (int i = 0; i < steps; i++) {
+		results.push_back(from + (step * i));
+	}
+	return results;
+}
+
+std::vector<glm::vec3> InterpolateThreeElementValues(const glm::vec3 from, const glm::vec3 to, const int steps) {
+	glm::vec3 dir = (to - from) * (1.0f / (steps - 1)); 
+	std::vector<glm::vec3> results;
+	for (int i = 0; i < steps; i++) {
+		results.push_back(from + (dir * static_cast<float>(i)));
+	}
+	return results;
+}
+
+void InterpolateSingleFloatsTest() {
+	std::vector<float> result;
+	result = InterpolateSingleFloats(2.2, 8.5, 7);
+	for(size_t i=0; i<result.size(); i++) std::cout << result[i] << " ";
+	std::cout << std::endl;
+}
+
+void InterpolateThreeElementsTest() {
+	std::vector<glm::vec3> result;
+	result = InterpolateThreeElementValues(glm::vec3(1.0, 4.0, 9.2), glm::vec3(4.0, 1.0, 9.8), 4);
+	for (size_t i = 0; i < result.size(); i++) std::cout << result[i].r << ", " << result[i].g << ", " << result[i].b << std::endl;
+}
+
+uint32_t PackColour(const uint8_t r, const uint8_t g, const uint8_t b) {
+	return (255 << 24) + (r << 16) + (g << 8) + b;
+}
 
 glm::vec2 CanvasPointToVec2(CanvasPoint p) {
 	return { p.x, p.y };
@@ -310,44 +431,6 @@ std::pair<Shape2D, Shape2D> FilledTriangle2DWithOutline(CanvasTriangle verticies
 	Shape2D shaded = CreateFilledTriangle2D(verticies, c, nullptr, nullptr);
 	Shape2D outline = CreateStrokedTriangle2D(verticies, Colour(255, 255, 255));
 	return std::make_pair(shaded, outline);
-}
-
-std::vector<float> InterpolateSingleFloats(const float from, const float to, const int steps) {
-	if (steps <= 1) {
-		return { from };
-	}
-	const float step = (to - from) / (steps - 1); 
-	std::vector<float> results;
-	for (int i = 0; i < steps; i++) {
-		results.push_back(from + (step * i));
-	}
-	return results;
-}
-
-std::vector<glm::vec3> InterpolateThreeElementValues(const glm::vec3 from, const glm::vec3 to, const int steps) {
-	glm::vec3 dir = (to - from) * (1.0f / (steps - 1)); 
-	std::vector<glm::vec3> results;
-	for (int i = 0; i < steps; i++) {
-		results.push_back(from + (dir * static_cast<float>(i)));
-	}
-	return results;
-}
-
-void InterpolateSingleFloatsTest() {
-	std::vector<float> result;
-	result = InterpolateSingleFloats(2.2, 8.5, 7);
-	for(size_t i=0; i<result.size(); i++) std::cout << result[i] << " ";
-	std::cout << std::endl;
-}
-
-void InterpolateThreeElementsTest() {
-	std::vector<glm::vec3> result;
-	result = InterpolateThreeElementValues(glm::vec3(1.0, 4.0, 9.2), glm::vec3(4.0, 1.0, 9.8), 4);
-	for (size_t i = 0; i < result.size(); i++) std::cout << result[i].r << ", " << result[i].g << ", " << result[i].b << std::endl;
-}
-
-uint32_t PackColour(const uint8_t r, const uint8_t g, const uint8_t b) {
-	return (255 << 24) + (r << 16) + (g << 8) + b;
 }
 
 void GrayscaleGradient(DrawingWindow &window) {
@@ -544,24 +627,29 @@ glm::vec3 CanvasPointToWorld(const Camera &camera, const float u, const float v)
 }
 
 
-Shape2D Pointcloud(std::vector<Triangle> triangles, Camera camera) {
+Shape2D Pointcloud(std::vector<Mesh>& meshes, Camera camera) {
 	std::vector<CanvasPoint> ps;
-	for (Triangle triangle : triangles) {
-		for (glm::vec3 vertex : triangle.model.vertices) {
-			ps.push_back(getCanvasIntersectionPoint(camera, vertex));
+	for (Mesh& m : meshes) {
+		for (size_t t = 0; t < m.triangles.size(); t++) {
+			for (size_t v = 0; v < 3; v++) {
+				ps.push_back(getCanvasIntersectionPoint(camera, m.GetVertex(t, v)));
+			}
 		}
 	}
+
 	return { ps, Colour(255, 255, 255) };
 }
 
-std::vector<Shape2D> Wireframe(std::vector<Triangle> triangles, Camera camera) {
+std::vector<Shape2D> Wireframe(std::vector<Mesh>& meshes, Camera& camera) {
 	std::vector<Shape2D> wireframe;
-	for (Triangle triangle : triangles) {
-		CanvasPoint p1 = getCanvasIntersectionPoint(camera, triangle.model.vertices[0]);
-		CanvasPoint p2 = getCanvasIntersectionPoint(camera, triangle.model.vertices[1]);
-		CanvasPoint p3 = getCanvasIntersectionPoint(camera, triangle.model.vertices[2]);
-		Shape2D triangle2D = CreateStrokedTriangle2D(CanvasTriangle(p1, p2, p3), Colour(255, 255, 255));
-		wireframe.push_back(triangle2D);
+	for (Mesh& m : meshes) {
+		for (size_t t = 0; t < m.triangles.size(); t++) {
+			CanvasPoint p1 = getCanvasIntersectionPoint(camera, m.GetVertex(t, 0));
+			CanvasPoint p2 = getCanvasIntersectionPoint(camera, m.GetVertex(t, 1));
+			CanvasPoint p3 = getCanvasIntersectionPoint(camera, m.GetVertex(t, 2));
+			Shape2D triangle2D = CreateStrokedTriangle2D(CanvasTriangle(p1, p2, p3), Colour(255, 255, 255));
+			wireframe.push_back(triangle2D);
+		}
 	}
 	return wireframe;
 }
@@ -578,47 +666,52 @@ bool PointInsideCanvas(CanvasPoint p) {
 	return (p.x >= 0 && p.x < WIDTH) && (p.y >= 0 && p.y < HEIGHT);
 }
 
-std::vector<std::vector<DepthPoint>> RasterisedRender(DrawingWindow& window, const std::vector<Triangle> triangles, const Camera camera) {
+std::vector<std::vector<DepthPoint>> RasterisedRender(DrawingWindow& window, const std::vector<Mesh>& meshes, const Camera camera) {
 	std::vector<std::vector<DepthPoint>> depthBuffer;
 	for (int y = 0; y < HEIGHT; y++) {
 		depthBuffer.push_back(std::vector<DepthPoint>());
 		for (int x = 0; x < WIDTH; x++)
 			depthBuffer[y].push_back({ Colour(), 0 });
 	}
-	for (Triangle triangle : triangles) {
-		// We must maintain a depth buffer as we build the triangles
-		const CanvasPoint p1 = getCanvasIntersectionPoint(camera, triangle.model.vertices[0]);
-		const CanvasPoint p2 = getCanvasIntersectionPoint(camera, triangle.model.vertices[1]);
-		const CanvasPoint p3 = getCanvasIntersectionPoint(camera, triangle.model.vertices[2]);
-		const ModelTriangle cameraSpaceTriangle = RotateTriangle(TranslateTriangle(triangle.model, -camera.position), camera.rotationMatrix);
-		if (PointInsideCanvas(p1) || PointInsideCanvas(p2) || PointInsideCanvas(p3)) {
-			CreateFilledTriangle2D(CanvasTriangle(p1, p2, p3), triangle.model.colour, &cameraSpaceTriangle, &depthBuffer);
+
+	for (const Mesh& m : meshes) {
+		for (size_t t = 0; t < m.triangles.size(); t++) {
+			// We must maintain a depth buffer as we build the triangles
+			const CanvasPoint p1 = getCanvasIntersectionPoint(camera, m.GetVertex(t, 0));
+			const CanvasPoint p2 = getCanvasIntersectionPoint(camera, m.GetVertex(t, 1));
+			const CanvasPoint p3 = getCanvasIntersectionPoint(camera, m.GetVertex(t, 2));
+			ModelTriangle tri(m.GetVertex(t, 0), m.GetVertex(t, 1), m.GetVertex(t, 2), m.GetColour());
+			const ModelTriangle cameraSpaceTriangle = RotateTriangle(TranslateTriangle(tri, -camera.position), camera.rotationMatrix);
+			if (PointInsideCanvas(p1) || PointInsideCanvas(p2) || PointInsideCanvas(p3)) {
+				CreateFilledTriangle2D(CanvasTriangle(p1, p2, p3), tri.colour, &cameraSpaceTriangle, &depthBuffer);
+			}
 		}
 	}
+
 	return depthBuffer;
 }
 
 struct RayCollision {
-	Colour color;
 	glm::vec3 position;
 	glm::vec3 normal;
 	glm::vec3 barycentric;
 	size_t triangle;
+	size_t mesh;
 	float distanceToCamera;
 };
 
 struct Ray {
 	glm::vec3 origin;
 	glm::vec3 direction;
+	bool isInsideMesh;
 };
 
-bool TriangleHitLoc(const Triangle& tri, const Ray& r, glm::vec3& loc, glm::vec3& barycentric) {
+bool TriangleHitLoc(const Mesh& mesh, const int& triangle, const Ray& r, glm::vec3& loc, glm::vec3& barycentric) {
 	// Get ray intersection with the plane described by two edges of the triangle
-	ModelTriangle model = tri.model;
 
 	// TODO: Figure out how to remove this because normal is precomputed
-	glm::vec3 normal = glm::cross(model.vertices[1] - model.vertices[0], model.vertices[2] - model.vertices[0]);
-	float d = glm::dot(model.vertices[0], normal);
+	glm::vec3 normal = glm::cross(mesh.GetVertex(triangle, 1) - mesh.GetVertex(triangle, 0), mesh.GetVertex(triangle, 2) - mesh.GetVertex(triangle, 0));
+	float d = glm::dot(mesh.GetVertex(triangle, 0), normal);
 	float n = glm::dot(normal, r.origin); // n.p_0
 	float m = glm::dot(normal, r.direction); // n.u
 	if (m == 0) 
@@ -628,9 +721,9 @@ bool TriangleHitLoc(const Triangle& tri, const Ray& r, glm::vec3& loc, glm::vec3
 
 	// Check that loc is inside triangle
 	float area2 = glm::length(normal);
-	glm::vec3 PC = model.vertices[2] - loc;
-	glm::vec3 PB = model.vertices[1] - loc;
-	glm::vec3 PA = model.vertices[0] - loc;
+	glm::vec3 PC = mesh.GetVertex(triangle, 2) - loc;
+	glm::vec3 PB = mesh.GetVertex(triangle, 1) - loc;
+	glm::vec3 PA = mesh.GetVertex(triangle, 0) - loc;
 	float alpha = glm::length(glm::cross(PB, PC)) / area2;
 	float beta = glm::length(glm::cross(PC, PA)) / area2;
 	float gamma = glm::length(glm::cross(PA, PB)) / area2;	
@@ -641,22 +734,49 @@ bool TriangleHitLoc(const Triangle& tri, const Ray& r, glm::vec3& loc, glm::vec3
 		   (fabs(alpha + beta + gamma - 1) <= 0.01);
 }
 
+bool SlabTest(const Ray& r, const Mesh& mesh, const Triangle& t) {
+	double tx1 = (t.bbox.first.x - r.origin.x) / r.direction.x;
+	double tx2 = (t.bbox.second.x - r.origin.x) / r.direction.x;
+
+	double tmin = fmin(tx1, tx2);
+	double tmax = fmax(tx1, tx2);
+
+	double ty1 = (t.bbox.first.y - r.origin.y) / r.direction.y;
+	double ty2 = (t.bbox.second.y - r.origin.y) / r.direction.y;
+
+	tmin = fmax(tmin, fmin(ty1, ty2));
+	tmax = fmin(tmax, fmax(ty1, ty2));
+	return tmax >= tmin;
+}
+
+void Collision(const Ray& r, const std::vector<Mesh>& meshes, const size_t mesh_i, const size_t triangle_i, RayCollision& nearest) {
+	const Mesh& mesh = meshes[mesh_i];
+	const Triangle& t = mesh.triangles[triangle_i];
+	if (!SlabTest(r, mesh, t)) {
+		return;
+	}
+
+	glm::vec3 loc;
+	glm::vec3 barycentric;
+	if (TriangleHitLoc(mesh, triangle_i, r, loc, barycentric)) {
+		float sqrDist = glm::length2(loc - r.origin);
+		// Check that the collision is after the start of the ray & collision is closer
+		if (glm::dot(r.direction, loc - r.origin) > 0.0 && sqrDist < nearest.distanceToCamera) {
+			glm::vec3 triNorm = t.normal;
+			if (glm::dot(triNorm, r.direction) > 0.0)
+				triNorm *= -1;
+			nearest = { loc, triNorm, barycentric, triangle_i, mesh_i, sqrDist };
+		}
+	}
+}
+
 // Returning a bool here cause someone decided we are using C++11 and therefore I can't use std::optional :(
-bool NearestRayCollision(Ray& r, const std::vector<Triangle>& triangles, RayCollision& collision) {
-	RayCollision nearest = { Colour(), glm::vec3(), glm::vec3(), glm::vec3(), 0, FLT_MAX };
-	for (size_t i = 0; i < triangles.size(); i++) {
-		Triangle t = triangles[i];
-		glm::vec3 loc;
-		glm::vec3 barycentric;
-		if (TriangleHitLoc(t, r, loc, barycentric)) {
-			float sqrDist = glm::length2(loc - r.origin);
-			// Check that the collision is after the start of the ray & collision is closer
-			if (glm::dot(r.direction, loc - r.origin) > 0.0 && sqrDist < nearest.distanceToCamera) {
-				glm::vec3 triNorm = t.model.normal;
-				if (glm::dot(triNorm, r.direction) > 0.0)
-					triNorm *= -1;
-				nearest = { t.model.colour, loc, triNorm, barycentric, i, sqrDist };
-			}
+bool NearestRayCollision(const Ray& r, const std::vector<Mesh>& meshes, RayCollision& collision) {
+	RayCollision nearest = { glm::vec3(), glm::vec3(), glm::vec3(), 0, 0, FLT_MAX };
+	for (size_t m = 0; m < meshes.size(); m++) {
+		const Mesh& mesh = meshes[m];
+		for (size_t i = 0; i < mesh.triangles.size(); i++) {
+			Collision(r, meshes, m, i, nearest);
 		}
 	}
 	if (nearest.distanceToCamera == FLT_MAX)
@@ -665,20 +785,30 @@ bool NearestRayCollision(Ray& r, const std::vector<Triangle>& triangles, RayColl
 	return true; 
 }
 
-bool InShadow(const glm::vec3& p, const glm::vec3& norm, const std::vector<Triangle>& triangles, const std::vector<glm::vec3> lights) {
+bool InShadow(const glm::vec3& p, const glm::vec3& norm, const std::vector<Mesh>& meshes, const std::vector<glm::vec3> lights) {
 	for (const glm::vec3& light : lights) {
 		glm::vec3 v = light - p;
 		Ray r = { p + norm * 0.001f, v };
 		RayCollision c;
-		if (!NearestRayCollision(r, triangles, c))
+		if (!NearestRayCollision(r, meshes, c))
 			return false;
 	}
 	return true;
 }
 
+enum Shading {
+	PROXIMITY,
+	ANGLE_OF_INCIDENCE,
+	SPECULAR,
+	PROXY_AOI_AND_SPECULAR,
+	GOURAUD,
+	PHONG,
+	NONE
+};
+
 double ProximityLighting(const std::vector<glm::vec3>& lights, const RayCollision& rc) {
 	// 1 / 4pir^2
-	double dist2 = FLT_MIN;
+	double dist2 = -FLT_MAX;
 	for (const glm::vec3& light : lights) {
 		dist2 = fmax(dist2, glm::length2(rc.position - light));
 	}
@@ -686,58 +816,172 @@ double ProximityLighting(const std::vector<glm::vec3>& lights, const RayCollisio
 }
 
 double AngleOfIncidenceLighting(const std::vector<glm::vec3>& lights, const RayCollision& rc) {
-	double lighting = FLT_MIN;
+	double lighting = -FLT_MAX;
 	for (const glm::vec3& light : lights) {
 		glm::vec3 dir = glm::normalize(light - rc.position);
 		lighting = fmax(lighting, glm::dot(dir, rc.normal));
 	}
-	return lighting > 0 ? pow(lighting, 4) : 0;
+	return lighting > 0 ? lighting/2 : 0;
 }
 
-double SpecularShading(const std::vector<glm::vec3>& lights, const RayCollision& rc, const glm::vec3& cameraP) {
-	double lighting = FLT_MIN;
+// Returns the reflected vector given normalised incident and normal vectors
+glm::vec3 ReflectionVector(const glm::vec3& incident, const glm::vec3& normal) {
+	return incident - 2.0f * normal * (glm::dot(normal, incident));
+}
+
+double SpecularLighting(const std::vector<glm::vec3>& lights, const RayCollision& rc, const glm::vec3& cameraP) {
+	double lighting = -FLT_MAX;
 	for (const glm::vec3& light : lights) {
-		glm::vec3 colToCamera = glm::normalize(cameraP - rc.position);
-		glm::vec3 incident = glm::normalize(rc.position - light);
-		glm::vec3 reflected = incident - 2.0f * rc.normal * (glm::dot(rc.normal, incident));
+		const glm::vec3 colToCamera = glm::normalize(cameraP - rc.position);
+		const glm::vec3 incident = glm::normalize(rc.position - light);
+		const glm::vec3 reflected = ReflectionVector(incident, rc.normal);
 		lighting = fmax(lighting, glm::dot(reflected, colToCamera));
 	}
+
 	return lighting > 0 ? pow(lighting, 256) : 0;
 }
 
-double GouraudShading(const std::vector<glm::vec3>& lights, const RayCollision& rc, const glm::vec3& cameraP, Triangle& triangle) {
+double GouraudShading(const std::vector<glm::vec3>& lights, const RayCollision& rc, const glm::vec3& cameraP, const Mesh& mesh, const int& triangle) {
 	// First apply AOI lighting + Specular Shading at each vertex, may have to invert normals
 	std::vector<double> vertexLighting;
-	for (size_t i = 0; i < triangle.model.vertices.size(); i++) {
-		glm::vec3& vertex = triangle.model.vertices[i];
+	for (size_t i = 0; i < 3; i++) {
+		const glm::vec3& vertex = mesh.GetVertex(triangle, i);
 		RayCollision c;
-		c.normal = glm::dot(rc.normal, triangle.vertexNormals[i]) > 0 ? triangle.vertexNormals[i] : -triangle.vertexNormals[i];
+		const glm::vec3& vertexNormal = mesh.GetVertexNormal(triangle, i);
+		c.normal = glm::dot(rc.normal, vertexNormal) >= 0 ? vertexNormal : -vertexNormal;
 		c.position = vertex;
-		vertexLighting.push_back(AngleOfIncidenceLighting(lights, c));
+		vertexLighting.push_back(fmin(1, fmax(SpecularLighting(lights, c, cameraP), AngleOfIncidenceLighting(lights, c))));
 	}
-	return 0;
+
+	// Assume vertex order remains the same, (A, B, C)
+	return vertexLighting[0] * rc.barycentric[0] + vertexLighting[1] * rc.barycentric[1] + vertexLighting[2] * rc.barycentric[2];
+}
+double PhongShading(const std::vector<glm::vec3>& lights, const RayCollision& rc, const glm::vec3& cameraP, const Mesh& mesh, const int& triangle) {
+	glm::vec3 interpolatedNormal(0, 0, 0);
+	for (size_t i = 0; i < 3; i++) {
+		glm::vec3 vertexNormal = mesh.GetVertexNormal(triangle, i);
+		vertexNormal = glm::dot(rc.normal, vertexNormal) >= 0 ? vertexNormal : -vertexNormal;
+		interpolatedNormal += vertexNormal * rc.barycentric[i];
+	}
+	RayCollision c;
+	c.normal = interpolatedNormal;
+	c.position = rc.position;
+	const double dist2 = glm::length2(rc.position - lights[0]);
+	return fmin(1, SpecularLighting(lights, c, cameraP) + AngleOfIncidenceLighting(lights, c) / (4 * M_PI * dist2) * 100);/// (4 * M_PI * dist2));
 }
 
-void Raytrace(DrawingWindow& window, const Camera& camera, const std::vector<glm::vec3>& lights, const std::vector<Triangle>& triangles, bool shadows=true) {
+std::pair<Colour, double> RayCast(const Ray& ray, const Camera& camera, const std::vector<glm::vec3>& lights, const std::vector<Mesh>& meshes, const int depth, const bool shadows=true, const Shading shader=NONE);
+
+// Cast a new ray from the collision point of the previous ray
+// Note: This is technically recursive if it keeps hitting mirrors
+std::pair<Colour, double> MirrorReflect(const Ray& incoming, const RayCollision& rc, const Camera& camera, const std::vector<glm::vec3>& lights, const std::vector<Mesh>& meshes, const int depth, const bool shadows=true, const Shading shader=NONE) {
+	const glm::vec3 reflected = ReflectionVector(glm::normalize(incoming.direction), rc.normal);
+	const Ray reflectedRay = { rc.position + (rc.normal * 0.0001f), reflected, incoming.isInsideMesh };
+	return RayCast(reflectedRay, camera, lights, meshes, depth + 1, shadows, shader);
+}
+
+double SchlickReflectance(const double cosTheta, const double refractiveIndex) {
+	double r0 = (refractiveIndex - 1) / (refractiveIndex + 1);
+	r0 = r0 * r0;
+	return r0 + (1 - r0) * pow(1 - cosTheta, 5);
+}
+
+std::pair<Colour, double> DielectricTransmission(const Ray& incoming, const RayCollision& rc, const Camera& camera, const std::vector<glm::vec3>& lights, const std::vector<Mesh>& meshes, const int depth, const bool shadows=true, const Shading shader=NONE) {
+	glm::vec3 normal = rc.normal;
+	const double transparancy = meshes[rc.mesh].transparancy;
+	const double refractiveIndex = meshes[rc.mesh].refractiveIndex;
+	const double smoothness = meshes[rc.mesh].smoothness;
+
+	const float cosTheta = fmin(glm::dot(-glm::normalize(incoming.direction), normal), 1.0);
+	float refractionRatio = refractiveIndex;
+	if (!incoming.isInsideMesh)
+		refractionRatio = 1.0 / refractiveIndex;
+	const double fresnelReflectance = SchlickReflectance(cosTheta, refractiveIndex);
+	const double reflectionScalar = (1 - transparancy) * (smoothness) + transparancy * fresnelReflectance;
+	const double transmissionScalar = transparancy * (1 - fresnelReflectance);
+	const double localScalar = (1 - transparancy) * (1 - smoothness);
+	
+	glm::vec3 perpendicular = (incoming.direction + (normal * cosTheta)) * refractionRatio;
+	glm::vec3 parallel = -normal * (float)sqrt(fabs(1.0 - glm::length2(perpendicular)));
+	glm::vec3 refractedVector = perpendicular + parallel;
+	const Ray refractedRay = { rc.position - (normal * 0.0001f), refractedVector, !incoming.isInsideMesh};
+
+	std::pair<Colour, double> reflected = MirrorReflect(incoming, rc, camera, lights, meshes, depth, shadows, shader);
+	std::pair<Colour, double> transmitted = RayCast(refractedRay, camera, lights, meshes, depth + 1, shadows, shader);
+	Colour localColour = meshes[rc.mesh].colour;
+
+	Colour combined = AddColours(ScaleColour(transmitted.first, transmissionScalar), AddColours(ScaleColour(localColour, localScalar), ScaleColour(reflected.first, reflectionScalar)));
+	return std::make_pair(combined, 1);
+}
+
+double ProcessShader(const Shading shader, const RayCollision& rc, const glm::vec3 camera, const std::vector<glm::vec3>& lights, const std::vector<Mesh>& meshes) {
+	switch (shader) {
+		case PROXIMITY: {
+			return ProximityLighting(lights, rc);
+		}
+		case ANGLE_OF_INCIDENCE: {
+			return AngleOfIncidenceLighting(lights, rc);
+		}
+		case SPECULAR: {
+			return SpecularLighting(lights, rc, camera);
+		}
+		case PROXY_AOI_AND_SPECULAR: {
+			double dist2 = glm::length2(lights[0] - rc.position);
+			return fmin(1, (SpecularLighting(lights, rc, camera) + AngleOfIncidenceLighting(lights, rc)) / (4 * M_PI * dist2) * 80);/// (4 * M_PI * dist2));
+		}
+		case GOURAUD: {
+			return GouraudShading(lights, rc, camera, meshes[rc.mesh], rc.triangle);
+		}
+		case PHONG: {
+			return PhongShading(lights, rc, camera, meshes[rc.mesh], rc.triangle);
+		}
+		default: {
+			return 1;
+		}
+	}
+}
+
+std::pair<Colour, double> RayCast(const Ray& ray, const Camera& camera, const std::vector<glm::vec3>& lights, const std::vector<Mesh>& meshes, const int depth, const bool shadows, const Shading shader) {
+	RayCollision c;
+	Colour colour;
+	double lighting = 0;
+	constexpr int maxdepth = 10;
+	if (NearestRayCollision(ray, meshes, c)) {
+		colour = meshes[c.mesh].colour;
+		if (shadows && InShadow(c.position, c.normal, meshes, lights))
+			lighting = 0.1;
+		else {
+			lighting = ProcessShader(shader, c, camera.position, lights, meshes);
+		}
+
+		if (meshes[c.mesh].refractiveIndex != 1 && depth < maxdepth) {
+			std::pair<Colour, double> refraction = DielectricTransmission(ray, c, camera, lights, meshes, depth, shadows, shader);
+			colour = refraction.first;
+		}
+		else if (meshes[c.mesh].smoothness > 0 && depth < maxdepth) {
+			// Reflective Material
+			std::pair<Colour, double> reflection = MirrorReflect(ray, c, camera, lights, meshes, depth, shadows, shader);
+			colour = LerpColour(colour, reflection.first, meshes[c.mesh].smoothness);
+		}
+	}
+	else
+		colour = Colour(0, 0, 0);
+	lighting = fmax(lighting, 0.1);
+	return std::make_pair(colour, lighting);
+}
+
+void Raytrace(DrawingWindow& window, const Camera& camera, const std::vector<glm::vec3>& lights, const std::vector<Mesh>& meshes, const bool shadows=true, const Shading shader=NONE) {
 	for (int v = 0; v < HEIGHT; v++) {
 		for (int u = 0; u < WIDTH; u++) {
-			// first find coords in 3D
-			glm::vec3 rayV = CanvasPointToWorld(camera, u, v);
-			glm::vec3 rayP = rayV + camera.position;
-			Ray ray = { rayP, rayV };
-			RayCollision c;
-			Colour colour;
-			double lighting = 1;
-			if (NearestRayCollision(ray, triangles, c)) {
-				colour = c.color;
-				if (shadows && InShadow(c.position, c.normal, triangles, lights))
-					colour = ScaleColour(colour, 0.2);
-				else
-					lighting = ProximityLighting(lights, c);
+			if (u == 235 && v == 233){
+				int x = 0;
 			}
-			else
-				colour = Colour(0, 0, 0);
-			lighting = fmax(lighting, 0.2);
+			// first find coords in 3D
+			const glm::vec3 rayV = CanvasPointToWorld(camera, u, v);
+			const Ray ray = { camera.position, rayV, false };
+			const std::pair<Colour, double> pixel = RayCast(ray, camera, lights, meshes, 0, shadows, shader);
+			const Colour colour = pixel.first;
+			const double lighting = pixel.second;
 			window.setPixelColour(u, v, PackColour(colour.red * lighting, colour.green * lighting, colour.blue * lighting));
 		}
 	}
@@ -780,8 +1024,11 @@ bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape
 			// Light Translations
 			else if (event.key.keysym.sym == SDLK_j) lights[0] = lights[0] + glm::vec3(-step, 0, 0);
 			else if (event.key.keysym.sym == SDLK_l) lights[0] = lights[0] + glm::vec3(step, 0, 0);
-			else if (event.key.keysym.sym == SDLK_k) lights[0] = lights[0] + glm::vec3(0, 0, -step);
-			else if (event.key.keysym.sym == SDLK_i) lights[0] = lights[0] + glm::vec3(0, 0, step);
+			else if (event.key.keysym.sym == SDLK_k) lights[0] = lights[0] + glm::vec3(0, 0, step);
+			else if (event.key.keysym.sym == SDLK_i) lights[0] = lights[0] + glm::vec3(0, 0, -step);
+			else if (event.key.keysym.sym == SDLK_m) lights[0] = lights[0] + glm::vec3(0, step, 0);
+			else if (event.key.keysym.sym == SDLK_n) lights[0] = lights[0] + glm::vec3(0, -step, 0);
+		
 
 			else if (event.key.keysym.sym == SDLK_l) c.lookAt(glm::vec3(0, 0, 0));
 			else if (event.key.keysym.sym == SDLK_o) {
@@ -801,16 +1048,15 @@ bool handleEvent(const SDL_Event event, DrawingWindow &window, std::vector<Shape
 			}
 		}
 	} else if (event.type == SDL_MOUSEBUTTONDOWN) {
-		window.savePPM("output.ppm");
-		window.saveBMP("output.bmp");
+		std::cout << "(" << event.button.x << ", " << event.button.y << ")" << std::endl;
 	} else if (event.type == SDL_QUIT) {
 		return true;
 	}
 	return false;
 }
 
-void DrawRasterized3D(DrawingWindow& window, Camera& camera, std::vector<Triangle>& triangles) {
-	std::vector<std::vector<DepthPoint>> depthBuffer = RasterisedRender(window, triangles, camera);
+void DrawRasterized3D(DrawingWindow& window, Camera& camera, std::vector<Mesh>& meshes) {
+	std::vector<std::vector<DepthPoint>> depthBuffer = RasterisedRender(window, meshes, camera);
 	for (int y = 0; y < HEIGHT; y++) {
 		for (int x = 0; x < WIDTH; x++) {
 			Colour c  = depthBuffer[y][x].colour;
@@ -843,12 +1089,27 @@ void run(Drawing draw) {
 	SDL_Event event;
 	std::vector<Shape2D> shapes;
 	Camera *camera = nullptr;
-	std::vector<Triangle> triangles;
+	std::vector<Mesh> meshes;
 	std::vector<glm::vec3> lights = {{ 0, 0, 2 }};
+	bool FPS_OUTPUT = false;
+	bool RECORDING = false;
+	int frame = 0;
+	std::string directory;
+
+	if (RECORDING) {
+		unsigned int ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+		char format[] = "Renders/%u/";
+		char out[100];
+		sprintf(out, format, ms);
+		directory = out;
+		if (mkdir(out, 0777) == -1) {
+			std::cerr << "Error: " << strerror(errno) << std::endl;
+		}
+	}
 
 	if (draw == POINT_CLOUD || draw == WIRE_FRAME || draw == RASTERISED_3D || draw == RAYTRACE) {
-		OBJFile objs("cornell-box.obj", "objs/", 0.35);
-		triangles = objs.GetTriangles();
+		OBJFile objs("cornell-box.obj", "objs/", 0.35); // 0.35
+		meshes = objs.GetMeshes();
 		camera = new Camera(glm::vec3(0.0, 0.0, 4.0), glm::vec3(0.0, 0.0, 0.0), 2.0);
 	}
 
@@ -858,17 +1119,17 @@ void run(Drawing draw) {
 		window.clearPixels();
 		switch (draw) {
 			case RASTERISED_3D:
-				DrawRasterized3D(window, *camera, triangles);
+				DrawRasterized3D(window, *camera, meshes);
 				break;
 			case RAYTRACE:
-				Raytrace(window, *camera, lights, triangles, false);
+				Raytrace(window, *camera, lights, meshes, true, PROXY_AOI_AND_SPECULAR);
 				break;
 			case POINT_CLOUD:
-				shapes = std::vector<Shape2D> { Pointcloud(triangles, *camera) };
+				shapes = std::vector<Shape2D> { Pointcloud(meshes, *camera) };
 				draw2D(window, shapes, draw);
 				break;
 			case WIRE_FRAME:
-				shapes = Wireframe(triangles, *camera);
+				shapes = Wireframe(meshes, *camera);
 				draw2D(window, shapes, draw);
 				break;
 			default:
@@ -878,13 +1139,21 @@ void run(Drawing draw) {
 			camera->orbitStep();
 		}
 		window.renderFrame();
+		frame++;
+		if (RECORDING) {
+			std::string filename = std::to_string(frame) + ".bmp";
+			window.saveBMP(directory + filename);
+		}
+
 		uint64_t end = SDL_GetPerformanceCounter();
 		float elapsed = (end - start) / (float)SDL_GetPerformanceFrequency() * 1000.0f;
 		SDL_Delay(int(fmax((1.0f / FPS_CAP) * 1000.0f - elapsed, 0)));
+		if (FPS_OUTPUT) {
+			end = SDL_GetPerformanceCounter();
+			elapsed = (end - start) / (float)SDL_GetPerformanceFrequency() * 1000.0f;
+			std::cout << "FPS=" <<  1.0f / (elapsed / 1000.0f) << std::endl; 
+		}
 
-		end = SDL_GetPerformanceCounter();
-		elapsed = (end - start) / (float)SDL_GetPerformanceFrequency() * 1000.0f;
-		std::cout << "FPS=" <<  1.0f / (elapsed / 1000.0f) << std::endl; 
 	}
 	delete camera;
 }
