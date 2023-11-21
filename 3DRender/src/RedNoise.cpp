@@ -45,6 +45,22 @@ Colour ScaleColour(Colour c, float s) {
 		);
 }
 
+glm::vec3 ScaleVec3(glm::vec3 v, glm::vec3 scale) {
+	return glm::vec3(
+		v.x * scale.x,
+		v.y * scale.y,
+		v.z * scale.z
+	);
+}
+
+glm::vec3 InvertVec3(glm::vec3 v) {
+	return glm::vec3(
+		1.0f / v.x,
+		1.0f / v.y,
+		1.0f / v.z
+	);
+}
+
 Colour AddColours(Colour c0, Colour c1) {
 	return Colour(
 		fmax(fmin(c0.red + c1.red, 255), 0),
@@ -72,107 +88,6 @@ void RemoveChar(std::string str, char c) {
 	// std::erase(iterator first, iterator last) erases the portion of the string inside the iterator range 
 }
 
-struct Triangle {
-	std::vector<size_t> vertices;
-	glm::vec3 normal;
-	std::pair<glm::vec3, glm::vec3> bbox;
-
-	Triangle(size_t v0, size_t v1, size_t v2, glm::vec3 normal) {
-		this->vertices.push_back(v0);
-		this->vertices.push_back(v1);
-		this->vertices.push_back(v2);
-		this->normal = normal;
-	}
-};
-
-enum MeshProperty {
-	SMOOTHNESS,
-	TRANSPARENCY,
-	POSITION
-}
-
-struct MeshPropertyUpdate {
-	double start;
-	double finish;
-	double speed; // 0.01/Frame
-	double step;
-	MeshProperty type;
-}
-
-struct MeshVec3PropertyUpdate {
-	glm::vec3 start;
-	glm::vec3 finish;
-	double speed;
-	double step;
-	MeshProperty type;
-}
-
-struct Mesh {
-	std::vector<MeshPropertyUpdate> propertyUpdates;
-	std::vector<MeshVec3PropertyUpdate> vec3PropertyUpdates;
-	std::vector<Triangle> triangles;
-	std::vector<glm::vec3> vertices;
-	std::vector<glm::vec3> vertexNormals;
-	Colour colour;
-	double smoothness;
-	double refractiveIndex;
-	double transparancy;
-
-	const glm::vec3& GetVertex(size_t t, size_t v) const {
-		return vertices[triangles[t].vertices[v]];
-	}
-
-	const glm::vec3& GetVertexNormal(size_t t, size_t v) const {
-		return vertexNormals[triangles[t].vertices[v]];
-	}
-
-	const Colour GetColour() const {
-		return colour;
-	}
-
-	void UpdateProperty(MeshPropertyUpdate& pu) {
-		switch (pu.type) {
-			case SMOOTHNESS: {
-				
-				break;
-			}
-			case TRANSPARENCY: {
-				break;
-			}
-			default: {
-				break;
-			}
-		}
-	}
-
-	void UpdateVec3Property(MeshVec3PropertyUpdate& pu) {
-		switch (pu.type) {
-			case POSITION: {
-				break;
-			}
-		}
-	}
-
-	void UpdateMesh() {
-		// for each property updater
-		// switch over the type
-		// update the corresponding value
-		// if current = finish, remove the property
-		for (MeshPropertyUpdate& propertyUpdate : propertyUpdates) {
-			UpdateProperty(propertyUpdate);	
-		}
-		for (MeshVec3PropertyUpdate propertyUpdate : vec3PropertyUpdates) {
-			UpdateVec3Property(propertyUpdate);
-		}
-	}
-};
-
-struct VertexNormal {
-	glm::vec3 total;
-	int n;
-	glm::vec3 vertex;
-};
-
 double vec3At(glm::vec3& v, size_t axis) {
 	if (axis == 0) return v.x;
 	if (axis == 1) return v.y;
@@ -196,11 +111,237 @@ void vec3SetAt(glm::vec3& v, size_t axis, double d) {
 	}
 }
 
+struct Triangle {
+	std::vector<size_t> vertices;
+	glm::vec3 normal;
+	std::pair<glm::vec3, glm::vec3> bbox;
+
+	Triangle(size_t v0, size_t v1, size_t v2, glm::vec3 normal) {
+		this->vertices.push_back(v0);
+		this->vertices.push_back(v1);
+		this->vertices.push_back(v2);
+		this->normal = normal;
+	}
+
+	std::pair<glm::vec3, glm::vec3> BoundingBox(std::vector<glm::vec3>& coords) {
+		glm::vec3 min(FLT_MAX, FLT_MAX, FLT_MAX);
+		glm::vec3 max(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+
+		for (size_t v : this->vertices) {
+			for (size_t axis = 0; axis < 3; axis++) {
+				vec3SetAt(min, axis, fmin(vec3At(min, axis), vec3At(coords[v], axis)));
+				vec3SetAt(max, axis, fmax(vec3At(max, axis), vec3At(coords[v], axis)));
+			}
+		}
+
+		this->bbox = std::make_pair(min, max);
+		return this->bbox;
+	}
+};
+
+float CyclicalValue(const double framesPerCycle, const double step) {
+	return -(1.0f / 2.0) * cos(2.0 * M_PI * step / framesPerCycle) + 1.0 / 2.0;
+}
+
+// Container for a stepwise update of a property on a mesh
+// Assuming 24 Frame/s, a 10 second transition requires 240 Frames
+struct MeshPropertyUpdate {
+	double* value;
+	double start;
+	double finish;
+	double speed;
+	double step;
+	bool cyclical;
+
+	MeshPropertyUpdate(double* value, double start, double finish, double speed, bool cyclical) {
+		this->value = value;
+		this->start = start;
+		this->finish = finish;
+		this->speed = speed;
+		this->step = 0;
+		this->cyclical = cyclical;
+	}
+
+	MeshPropertyUpdate(double* value, double finish, double speed, bool cyclical) {
+		this->value = value;
+		this->start = *value;
+		this->finish = finish;
+		this->speed = speed;
+		this->step = 0;
+		this->cyclical = cyclical;
+	}
+
+	bool Update() {
+		step++;
+		double v = CyclicalValue(speed, step);
+		*value = start + (finish - start) * v; 
+		return NotFinished();
+	}
+
+	bool NotFinished() {
+		if (cyclical)
+			return true;
+		
+		return !(finish - *value <= 0);
+	}
+};
+
+struct MeshVec3PropertyUpdate {
+	glm::vec3* value;
+	glm::vec3 start;
+	glm::vec3 finish;
+	float speed;
+	float step;
+	bool cyclical;
+	
+	MeshVec3PropertyUpdate(glm::vec3* value, glm::vec3 start, glm::vec3 finish, double speed, bool cyclical) {
+		this->value = value;
+		this->start = start;
+		this->finish = finish;
+		this->speed = speed;
+		this->step = 0;
+		this->cyclical = cyclical;
+	}
+
+	bool Update() {
+		step++;
+		float v = CyclicalValue(speed, step);
+		*value = start + (finish - start) * v;
+		return NotFinished();
+	}
+
+	bool NotFinished() {
+		if (cyclical)
+			return true;
+		
+		return !(glm::dot(finish - start, finish - *value) <= 0); 
+	}
+};
+
+struct Mesh {
+	std::vector<MeshPropertyUpdate> propertyUpdates = {};
+	std::vector<MeshVec3PropertyUpdate> vec3PropertyUpdates= {};
+	std::vector<Triangle> triangles;
+	std::vector<glm::vec3> vertices;
+	std::vector<glm::vec3> vertexNormals;
+	Colour colour;
+	double smoothness;
+	double refractiveIndex;
+	double transparancy;
+	std::string name;
+	glm::vec3 currentScale = {1, 1, 1};
+	glm::vec3 scaleTransition = {1, 1, 1};
+	glm::vec3 translation;
+	glm::vec3 position;
+
+	const glm::vec3& GetVertex(const size_t t, const size_t v) const {
+		return vertices[triangles[t].vertices[v]];
+	}
+
+	void SetVertex(const size_t t, const size_t v, const glm::vec3 vertex) {
+		vertices[triangles[t].vertices[v]] = vertex;
+	}
+
+	// Vertex and face normals will require recomputation if I add rotations
+	const glm::vec3& GetVertexNormal(size_t t, size_t v) const {
+		return vertexNormals[triangles[t].vertices[v]];
+	}
+
+	const Colour GetColour() const {
+		return colour;
+	}
+
+	void UpdateMesh() {
+		std::vector<MeshPropertyUpdate> updaters;
+		for (MeshPropertyUpdate& propertyUpdate : propertyUpdates) {
+			if (propertyUpdate.Update()) {
+				updaters.push_back(propertyUpdate);
+			}
+		}
+		this->propertyUpdates = updaters;
+
+		std::vector<MeshVec3PropertyUpdate> vec3Updaters;
+		for (MeshVec3PropertyUpdate& propertyUpdate : vec3PropertyUpdates) {
+			if (propertyUpdate.Update()) {
+				vec3Updaters.push_back(propertyUpdate);
+			}
+		}
+		this->vec3PropertyUpdates = vec3Updaters;
+
+		// --------------------------------------------------------------------------
+		// VERTEX UPDATES:
+		bool updated = false;
+
+		// Position = Previous Position, Translation = New Position after translation
+		glm::vec3 movement = translation - position;
+		if (glm::dot(movement, movement) > 0.000001f) {
+			Translate(movement);
+			position += movement;
+			updated = true;
+		}
+
+		if (fabs(glm::dot(scaleTransition, scaleTransition) - 3) > 0.000001f) {
+			Scale(InvertVec3(currentScale));
+			Scale(scaleTransition);
+			updated = true;
+			currentScale = scaleTransition;
+		}
+
+		if (updated)
+			ComputeBoundingBoxes();
+	}
+
+	std::pair<glm::vec3, glm::vec3> MeshBoundingBox() {
+		glm::vec3 min(FLT_MAX, FLT_MAX, FLT_MAX);
+		glm::vec3 max(-FLT_MAX, -FLT_MAX, -FLT_MAX);
+
+		for (Triangle& t : triangles) {
+			for (size_t axis = 0; axis < 3; axis++) {
+				vec3SetAt(min, axis, fmin(vec3At(min, axis), vec3At(t.bbox.first, axis)));
+				vec3SetAt(max, axis, fmax(vec3At(max, axis), vec3At(t.bbox.second, axis)));
+			}
+		}
+		return std::make_pair(min, max);
+	}
+
+	glm::vec3 Centre() {
+		return (MeshBoundingBox().first + MeshBoundingBox().second) / 2.0f;
+	}
+
+	void Translate(glm::vec3 translation) {
+		for (glm::vec3& vertex : vertices) {
+			vertex += translation;
+		}
+	}
+
+	void Scale(glm::vec3 scale) {
+		glm::vec3 centre = this->Centre();
+		this->Translate(-centre);
+		for (glm::vec3& vertex : vertices) {
+			vertex = ScaleVec3(vertex, scale);
+		}
+		this->Translate(centre);
+	}
+
+	void ComputeBoundingBoxes() {
+		for (Triangle& t : triangles) {
+			t.BoundingBox(vertices);
+		}
+	}
+};
+
+struct VertexNormal {
+	glm::vec3 total;
+	int n;
+	glm::vec3 vertex;
+};
+
 // Mesh Container
 // Material Properties:
 // 		- Smoothness: 		0 = Diffuse, 1 = Reflective
-//  	- Refractive Index: 0 = No Refraction
+//  	- Refractive Index: 1 = No Refraction
 // 		- Transparancy: 	0 = Opaque, 1 = Transparent
+// TODO: Just remove this struct its a pointless intermediary for Mesh
 struct OBJ {
 	Mesh mesh;
 	std::string name;
@@ -210,24 +351,12 @@ struct OBJ {
 		mesh.vertices = coords;
 		mesh.smoothness = 0;
 		mesh.refractiveIndex = 1;
-		if (name == "short_box") {
-			mesh.smoothness = 0.0;
-			mesh.refractiveIndex = 1.000001;
-			mesh.transparancy = 1;
-		}
+		mesh.name = name;
+
 		for (std::vector<int> face : faces) {
 			glm::vec3 normal = glm::normalize(glm::cross(coords[face[0] - 1] - coords[face[1] - 1], coords[face[0] - 1] - coords[face[2] - 1]));
 			Triangle t(face[0] - 1, face[1] - 1, face[2] - 1, normal);
-
-			glm::vec3 min(FLT_MAX, FLT_MAX, FLT_MAX);
-			glm::vec3 max(-FLT_MAX, -FLT_MAX, -FLT_MAX);
-			for (size_t v : t.vertices) {
-				for (size_t axis = 0; axis < 3; axis++) {
-					vec3SetAt(min, axis, fmin(vec3At(min, axis), vec3At(coords[v], axis)));
-					vec3SetAt(max, axis, fmax(vec3At(max, axis), vec3At(coords[v], axis)));
-				}
-			}
-			t.bbox = std::make_pair(min, max);
+			t.BoundingBox(coords);
 			mesh.triangles.push_back(t);
 		}
 
@@ -1149,6 +1278,34 @@ void draw2D(DrawingWindow &window, std::vector<Shape2D> shapes, Drawing d) {
 	}
 }
 
+void AddMeshPropertyUpdaters(std::vector<Mesh>& meshes) {
+	for (Mesh& mesh : meshes) {
+		if (mesh.name == "short_box") {
+			/*
+			MeshPropertyUpdate smoothnessUpdater(&(mesh.smoothness), 1, 120, true);
+			mesh.propertyUpdates.push_back(smoothnessUpdater);
+			*/
+
+			/*
+			mesh.refractiveIndex = 1.2f;
+			MeshPropertyUpdate transparencyUpdater(&(mesh.transparancy), 0, 1, 60, true);
+			mesh.propertyUpdates.push_back(transparencyUpdater);
+			*/
+
+			MeshVec3PropertyUpdate scalingUpdater(&(mesh.scaleTransition), glm::vec3(1, 1, 1), glm::vec3(0.5, 1, 0.5), 120, true);
+			mesh.vec3PropertyUpdates.push_back(scalingUpdater);
+
+			
+			MeshVec3PropertyUpdate positionUpdater(&(mesh.translation), glm::vec3(0, 0, 0), glm::vec3(1, 0, 0), 120, true);
+			mesh.vec3PropertyUpdates.push_back(positionUpdater);
+			
+		}
+		if (mesh.name == "tall_box") {
+			mesh.smoothness = 1;
+		}
+	}
+}
+
 void run(Drawing draw) {
 	DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
 	SDL_Event event;
@@ -1158,6 +1315,7 @@ void run(Drawing draw) {
 	std::vector<glm::vec3> lights = {{ 0, 0, 2 }};
 	bool FPS_OUTPUT = false;
 	bool RECORDING = false;
+	bool DYNAMIC_MESH = true;
 	int frame = 0;
 	std::string directory;
 
@@ -1176,6 +1334,10 @@ void run(Drawing draw) {
 		OBJFile objs("cornell-box.obj", "objs/", 0.35); // 0.35
 		meshes = objs.GetMeshes();
 		camera = new Camera(glm::vec3(0.0, 0.0, 4.0), glm::vec3(0.0, 0.0, 0.0), 2.0);
+	}
+
+	if (DYNAMIC_MESH) {
+		AddMeshPropertyUpdaters(meshes);
 	}
 
 	while (true) {
@@ -1200,10 +1362,13 @@ void run(Drawing draw) {
 			default:
 				draw2D(window, shapes, draw);
 		}
+		window.renderFrame();
 		if (camera && camera->orbiting) {
 			camera->orbitStep();
 		}
-		window.renderFrame();
+		if (DYNAMIC_MESH) {
+			for (Mesh& m : meshes) m.UpdateMesh();
+		}
 		frame++;
 		if (RECORDING) {
 			std::string filename = std::to_string(frame) + ".bmp";
