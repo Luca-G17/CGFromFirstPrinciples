@@ -85,7 +85,31 @@ struct Triangle {
 	}
 };
 
+enum MeshProperty {
+	SMOOTHNESS,
+	TRANSPARENCY,
+	POSITION
+}
+
+struct MeshPropertyUpdate {
+	double start;
+	double finish;
+	double speed; // 0.01/Frame
+	double step;
+	MeshProperty type;
+}
+
+struct MeshVec3PropertyUpdate {
+	glm::vec3 start;
+	glm::vec3 finish;
+	double speed;
+	double step;
+	MeshProperty type;
+}
+
 struct Mesh {
+	std::vector<MeshPropertyUpdate> propertyUpdates;
+	std::vector<MeshVec3PropertyUpdate> vec3PropertyUpdates;
 	std::vector<Triangle> triangles;
 	std::vector<glm::vec3> vertices;
 	std::vector<glm::vec3> vertexNormals;
@@ -104,6 +128,42 @@ struct Mesh {
 
 	const Colour GetColour() const {
 		return colour;
+	}
+
+	void UpdateProperty(MeshPropertyUpdate& pu) {
+		switch (pu.type) {
+			case SMOOTHNESS: {
+				
+				break;
+			}
+			case TRANSPARENCY: {
+				break;
+			}
+			default: {
+				break;
+			}
+		}
+	}
+
+	void UpdateVec3Property(MeshVec3PropertyUpdate& pu) {
+		switch (pu.type) {
+			case POSITION: {
+				break;
+			}
+		}
+	}
+
+	void UpdateMesh() {
+		// for each property updater
+		// switch over the type
+		// update the corresponding value
+		// if current = finish, remove the property
+		for (MeshPropertyUpdate& propertyUpdate : propertyUpdates) {
+			UpdateProperty(propertyUpdate);	
+		}
+		for (MeshVec3PropertyUpdate propertyUpdate : vec3PropertyUpdates) {
+			UpdateVec3Property(propertyUpdate);
+		}
 	}
 };
 
@@ -300,6 +360,10 @@ struct OBJFile {
 		return meshes;
 	}
 };
+
+double Lerp(const double a, const double b, const double s) {
+	return a + (b - a) * s;
+}
 
 Colour LerpColour(Colour c0, Colour c1, double a) {
 	// I wish Colour had operator overloading :(
@@ -731,7 +795,7 @@ bool TriangleHitLoc(const Mesh& mesh, const int& triangle, const Ray& r, glm::ve
 	return (alpha >= 0 && alpha <= 1) &&
 		   (beta  >= 0 && beta  <= 1) &&
 		   (gamma >= 0 && gamma <= 1) &&
-		   (fabs(alpha + beta + gamma - 1) <= 0.01);
+		   (fabs(alpha + beta + gamma - 1) <= 0.0001);
 }
 
 bool SlabTest(const Ray& r, const Mesh& mesh, const Triangle& t) {
@@ -783,17 +847,6 @@ bool NearestRayCollision(const Ray& r, const std::vector<Mesh>& meshes, RayColli
 		return false;
 	collision = nearest;
 	return true; 
-}
-
-bool InShadow(const glm::vec3& p, const glm::vec3& norm, const std::vector<Mesh>& meshes, const std::vector<glm::vec3> lights) {
-	for (const glm::vec3& light : lights) {
-		glm::vec3 v = light - p;
-		Ray r = { p + norm * 0.001f, v };
-		RayCollision c;
-		if (!NearestRayCollision(r, meshes, c))
-			return false;
-	}
-	return true;
 }
 
 enum Shading {
@@ -896,14 +949,15 @@ std::pair<Colour, double> DielectricTransmission(const Ray& incoming, const RayC
 	float refractionRatio = refractiveIndex;
 	if (!incoming.isInsideMesh)
 		refractionRatio = 1.0 / refractiveIndex;
+
 	const double fresnelReflectance = SchlickReflectance(cosTheta, refractiveIndex);
 	const double reflectionScalar = (1 - transparancy) * (smoothness) + transparancy * fresnelReflectance;
 	const double transmissionScalar = transparancy * (1 - fresnelReflectance);
 	const double localScalar = (1 - transparancy) * (1 - smoothness);
-	
-	glm::vec3 perpendicular = (incoming.direction + (normal * cosTheta)) * refractionRatio;
-	glm::vec3 parallel = -normal * (float)sqrt(fabs(1.0 - glm::length2(perpendicular)));
-	glm::vec3 refractedVector = perpendicular + parallel;
+
+	const float sinR2 = refractionRatio * refractionRatio * (1.0f - (cosTheta * cosTheta));
+	const float cosR = sqrt(1.0f - sinR2);
+	glm::vec3 refractedVector = refractionRatio * incoming.direction + (refractionRatio * cosTheta - cosR) * normal;
 	const Ray refractedRay = { rc.position - (normal * 0.0001f), refractedVector, !incoming.isInsideMesh};
 
 	std::pair<Colour, double> reflected = MirrorReflect(incoming, rc, camera, lights, meshes, depth, shadows, shader);
@@ -941,6 +995,17 @@ double ProcessShader(const Shading shader, const RayCollision& rc, const glm::ve
 	}
 }
 
+bool InShadow(const glm::vec3& p, const glm::vec3& norm, const std::vector<Mesh>& meshes, const std::vector<glm::vec3> lights) {
+	for (const glm::vec3& light : lights) {
+		glm::vec3 v = light - p;
+		Ray r = { p + norm * 0.001f, v };
+		RayCollision c;
+		if (!NearestRayCollision(r, meshes, c))
+			return false;
+	}
+	return true;
+}
+
 std::pair<Colour, double> RayCast(const Ray& ray, const Camera& camera, const std::vector<glm::vec3>& lights, const std::vector<Mesh>& meshes, const int depth, const bool shadows, const Shading shader) {
 	RayCollision c;
 	Colour colour;
@@ -966,7 +1031,7 @@ std::pair<Colour, double> RayCast(const Ray& ray, const Camera& camera, const st
 	}
 	else
 		colour = Colour(0, 0, 0);
-	lighting = fmax(lighting, 0.1);
+	lighting = fmax(lighting, 0.2);
 	return std::make_pair(colour, lighting);
 }
 

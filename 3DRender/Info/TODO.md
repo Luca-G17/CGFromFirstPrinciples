@@ -4,8 +4,8 @@
 # ToDo:
 - [ ] Make canvas point scalar not a magic number
 - [ ] Fix memory leaks
+- [ ] Experiment with methods for shadows behind dieletrics
 - [ ] Investigate Photon Mapping
-- [ ] Add Dieletrics
 - [ ] Investigate Normal Maps
 - [ ] Investigate Environment maps
 
@@ -23,3 +23,4 @@
 - [X] Raytracing desperatly needs optimisation, potentially triangles need to only store vertex indices, remove pass by values, prevent copying where possible
 - [X] Fix gourand and phong shaders
 - [X] Fix ray origin to be the actual position of the camera
+- [X] Add Dieletrics
