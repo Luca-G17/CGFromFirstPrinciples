@@ -4,12 +4,10 @@
 # ToDo:
 - [ ] Make canvas point scalar not a magic number
 - [ ] Fix memory leaks
-- [ ] Experiment with methods for shadows behind dieletrics
 - [ ] Investigate Photon Mapping
-- [ ] Investigate Normal Maps
 - [ ] Investigate Environment maps
 
-# ToDone:
+# ToDone:  
 - [X] Add wireframe rendering to the 3D renderer so it utilise movement controls
 - [X] Add raytracing
     - [X] Ray-triangle intersection
@@ -24,3 +22,9 @@
 - [X] Fix gourand and phong shaders
 - [X] Fix ray origin to be the actual position of the camera
 - [X] Add Dieletrics
+- [X] Add mesh property transitions
+- [X] Add soft shadows
+- [X] Experiment with methods for shadows behind dieletrics
+- [X] Add soft shadows
+- [X] Fix texture mapping
+- [X] Add mormal mapping aligned with textures
