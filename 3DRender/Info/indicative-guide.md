@@ -15,7 +15,7 @@ If you want to be certain of achieving a grade within a particular band, the saf
 **For a mark in the 40s you must _convincingly_ implement ALL above features, as well as SOME of the following**:
 - [X] OBJ material file loading
 - [X] Flat colour 3D scene rasterising
-- [] Surface texture mapping
+- [X] Surface texture mapping
 - [X] Keyboard control of camera orientation (using orientation matrix)
 
 **For a mark in the 50s you must _convincingly_ implement ALL above features, as well as SOME of the following**:

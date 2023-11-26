@@ -4,8 +4,6 @@
 # ToDo:
 - [ ] Make canvas point scalar not a magic number
 - [ ] Fix memory leaks
-- [ ] Investigate Photon Mapping
-- [ ] Investigate Environment maps
 
 # ToDone:  
 - [X] Add wireframe rendering to the 3D renderer so it utilise movement controls
@@ -28,3 +26,7 @@
 - [X] Add soft shadows
 - [X] Fix texture mapping
 - [X] Add mormal mapping aligned with textures
+- [X] Parallelize Renderer
+- [X] Add Bezier curves
+- [X] Add stanford bunny
+- [X] Add mesh rotations

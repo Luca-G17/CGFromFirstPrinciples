@@ -17,10 +17,41 @@
 #include <filesystem>
 #include <sys/stat.h>
 #include <chrono>
+#include <mutex>
+#include <future>
+#include <condition_variable>
 
-#define WIDTH 440
-#define HEIGHT 300
+#define WIDTH 640
+#define HEIGHT 480
 #define FPS_CAP 60
+
+
+struct Semaphore {
+	std::mutex mutex;
+	std::condition_variable condition;
+	unsigned long count = 0;
+
+	void Release() {
+		std::lock_guard<decltype(mutex)> lock(mutex);
+		count++;
+		condition.notify_one();
+	}
+	void Aquire() {
+		std::unique_lock<decltype(mutex)> lock(mutex);
+		while (count == 0) {
+			condition.wait(lock);
+		}
+		count--;
+	}
+	bool TryAquire() {
+		std::lock_guard<decltype(mutex)> lock(mutex);
+		if (count != 0) {
+			count--;
+			return true;
+		}
+		return false;
+	}
+};
 
 struct Shape2D {
 	std::vector<CanvasPoint> points;
@@ -194,10 +225,12 @@ struct MeshVec3PropertyUpdate {
 	glm::vec3* value;
 	glm::vec3 start;
 	glm::vec3 finish;
+	glm::vec3 bezierMid;
 	float speed;
 	float step;
 	bool cyclical;
-	
+	bool bezier = false;
+
 	MeshVec3PropertyUpdate(glm::vec3* value, glm::vec3 start, glm::vec3 finish, double speed, bool cyclical) {
 		this->value = value;
 		this->start = start;
@@ -207,18 +240,34 @@ struct MeshVec3PropertyUpdate {
 		this->cyclical = cyclical;
 	}
 
+	MeshVec3PropertyUpdate(glm::vec3* value, glm::vec3 start, glm::vec3 bezierMid ,glm::vec3 finish, double speed, bool cyclical) {
+		this->value = value;
+		this->start = start;
+		this->finish = finish;
+		this->speed = speed;
+		this->step = 0;
+		this->cyclical = cyclical;
+		this->bezierMid = bezierMid;
+		this->bezier = true;
+	}
+
 	bool Update() {
 		step++;
 		float v = CyclicalValue(speed, step);
-		*value = start + (finish - start) * v;
-		return NotFinished();
+		if (bezier) {
+			*value = ((1 - v) * (((1 - v) * start) + (v * bezierMid))) + (v * (((1 - v) * bezierMid) + (v * finish)));
+		}
+		else {
+			*value = start + (finish - start) * v;
+		}
+		return NotFinished(v);
 	}
 
-	bool NotFinished() {
+	bool NotFinished(double v) {
 		if (cyclical)
 			return true;
 		
-		return !(glm::dot(finish - start, finish - *value) <= 0); 
+		return ((1 - v) > 0.0001f); 
 	}
 };
 
@@ -397,10 +446,10 @@ struct TextureMapper {
 				int width = textureMap[0].size();
 				int w = (int)(width * scale);
 				int h = (int)(height * scale);
-				vertexMapping.push_back({ bottomLeft, {0, h} });
-				vertexMapping.push_back({ bottomRight, {w, h} });
+				vertexMapping.push_back({ bottomLeft, {0, h - 1} });
+				vertexMapping.push_back({ bottomRight, {w - 1, h - 1} });
 				vertexMapping.push_back({ topLeft, {0, 0} });
-				vertexMapping.push_back({ topRight, {w, 0} });
+				vertexMapping.push_back({ topRight, {w - 1, 0} });
 				break;
 			}
 			default: {
@@ -410,12 +459,46 @@ struct TextureMapper {
 	}
 };
 
+glm::mat3 RotationMatrix(const float x, const float y, const float z) {
+	//  Roll
+	//  | cos(x) | -sin(x) | 0 |
+	//  | sin(x) |  cos(x) | 0 |    = Rx(x)
+	//  |   0    |    0    | 1 |
+	//
+	//  Yaw
+	//  |  cos(y) | 0 | sin(y) |
+	//  |    0    | 1 |   0    |    = Ry(y)
+	//  | -sin(y) | 0 | cos(y) |
+	//
+	//  Pitch
+	//  | 1 |   0    |    0    |
+	//  | 0 | cos(z) | -sin(z) |    = Rz(z)
+	//  | 0 | sin(z) |  cos(z) |
+	//
+	// R = Rx(x) * Ry(y) * Rz(z)
+	const glm::mat3 roll(glm::vec3(cos(x), sin(x), 0), glm::vec3(-sin(x), cos(x), 0), glm::vec3(0, 0, 1));
+	const glm::mat3 yaw(glm::vec3(cos(y), 0, -sin(y)), glm::vec3(0, 1, 0), glm::vec3(sin(y), 0, cos(y)));
+	const glm::mat3 pitch(glm::vec3(1, 0, 0), glm::vec3(0, cos(z), sin(z)), glm::vec3(0, -sin(z), cos(z)));
+	return yaw * pitch * roll;
+}
+
+enum class Shading {
+	PROXIMITY,
+	ANGLE_OF_INCIDENCE,
+	SPECULAR,
+	PROXY_AOI_AND_SPECULAR,
+	GOURAUD,
+	PHONG,
+	NONE
+};
+
 struct Mesh {
 	std::vector<MeshPropertyUpdate> propertyUpdates = {};
 	std::vector<MeshVec3PropertyUpdate> vec3PropertyUpdates= {};
 	std::vector<Triangle> triangles;
 	std::vector<glm::vec3> vertices;
 	std::vector<glm::vec3> vertexNormals;
+	std::pair<glm::vec3, glm::vec3> bbox;
 	TextureMapper texture = {};
 
 	Colour colour;
@@ -427,6 +510,7 @@ struct Mesh {
 	glm::vec3 scaleTransition = {1, 1, 1};
 	glm::vec3 translation;
 	glm::vec3 position;
+	Shading shadingType = Shading::PROXY_AOI_AND_SPECULAR;
 
 	void SetTextureMapper(TextureMap textureMap, TextureMap normalMap) {
 		this->texture = TextureMapper(textureMap, normalMap, this->triangles[0].normal, TextureMappingPrimative::RECTANGLE);
@@ -474,25 +558,20 @@ struct Mesh {
 
 		// --------------------------------------------------------------------------
 		// VERTEX UPDATES:
-		bool updated = false;
 
 		// Position = Previous Position, Translation = New Position after translation
 		glm::vec3 movement = translation - position;
 		if (glm::dot(movement, movement) > 0.000001f) {
 			Translate(movement);
 			position += movement;
-			updated = true;
 		}
 
 		if (fabs(glm::dot(scaleTransition, scaleTransition) - 3) > 0.000001f) {
 			Scale(InvertVec3(currentScale));
 			Scale(scaleTransition);
-			updated = true;
 			currentScale = scaleTransition;
 		}
-
-		if (updated)
-			ComputeBoundingBoxes();
+		MeshBoundingBox();
 	}
 
 	std::pair<glm::vec3, glm::vec3> MeshBoundingBox() {
@@ -505,7 +584,8 @@ struct Mesh {
 				vec3SetAt(max, axis, fmax(vec3At(max, axis), vec3At(t.bbox.second, axis)));
 			}
 		}
-		return std::make_pair(min, max);
+		this->bbox = std::make_pair(min, max);
+		return this->bbox;
 	}
 
 	glm::vec3 Centre() {
@@ -516,6 +596,7 @@ struct Mesh {
 		for (glm::vec3& vertex : vertices) {
 			vertex += translation;
 		}
+		ComputeBoundingBoxes();
 	}
 
 	void Scale(glm::vec3 scale) {
@@ -525,6 +606,24 @@ struct Mesh {
 			vertex = ScaleVec3(vertex, scale);
 		}
 		this->Translate(centre);
+		ComputeBoundingBoxes();
+	}
+
+	void Rotate(glm::vec3 rotation) {
+		glm::mat3 rotMat = RotationMatrix(rotation.x, rotation.y, rotation.z);
+		glm::vec3 centre = this->Centre();
+		this->Translate(-centre);
+		for (glm::vec3& vertex : vertices) {
+			vertex = rotMat * vertex;
+		}
+		for (glm::vec3& vertexNormal : vertexNormals) {
+			vertexNormal = rotMat * vertexNormal;
+		}
+		for (Triangle& t : triangles) {
+			t.normal = rotMat * t.normal;
+		}
+		this->Translate(centre);
+		ComputeBoundingBoxes();
 	}
 
 	void ComputeBoundingBoxes() {
@@ -925,45 +1024,104 @@ void WitchSymbol(DrawingWindow &window) {
 	DrawShape2D(window, CreateLine2D(CanvasPoint(midX - WIDTH / 6, midY), CanvasPoint(midX + WIDTH / 6, midY), white));
 }
 
-glm::mat3 RotationMatrix(const float x, const float y, const float z) {
-	//  Roll
-	//  | cos(x) | -sin(x) | 0 |
-	//  | sin(x) |  cos(x) | 0 |    = Rx(x)
-	//  |   0    |    0    | 1 |
-	//
-	//  Yaw
-	//  |  cos(y) | 0 | sin(y) |
-	//  |    0    | 1 |   0    |    = Ry(y)
-	//  | -sin(y) | 0 | cos(y) |
-	//
-	//  Pitch
-	//  | 1 |   0    |    0    |
-	//  | 0 | cos(z) | -sin(z) |    = Rz(z)
-	//  | 0 | sin(z) |  cos(z) |
-	//
-	// R = Rx(x) * Ry(y) * Rz(z)
-	const glm::mat3 roll(glm::vec3(cos(x), sin(x), 0), glm::vec3(-sin(x), cos(x), 0), glm::vec3(0, 0, 1));
-	const glm::mat3 yaw(glm::vec3(cos(y), 0, -sin(y)), glm::vec3(0, 1, 0), glm::vec3(sin(y), 0, cos(y)));
-	const glm::mat3 pitch(glm::vec3(1, 0, 0), glm::vec3(0, cos(z), sin(z)), glm::vec3(0, -sin(z), cos(z)));
-	return yaw * pitch * roll;
-}
+struct Light {
+	std::vector<MeshPropertyUpdate> propertyUpdaters = {};
+	std::vector<MeshVec3PropertyUpdate> positionUpdaters = {};
+	glm::vec3 position;
+	glm::vec3 translated;
+	double radius;
+
+	Light(const glm::vec3 position, const float radius) {
+		this->position = position;
+		this->translated = position;
+		this->radius = radius;
+	}
+
+	void Update() {
+		std::vector<MeshPropertyUpdate> updaters;
+		for (MeshPropertyUpdate updater : propertyUpdaters) {
+			if (updater.Update()) {
+				updaters.push_back(updater);
+			}
+		}
+		this->propertyUpdaters = updaters;
+
+		std::vector<MeshVec3PropertyUpdate> vec3Updaters;
+		for (MeshVec3PropertyUpdate& propertyUpdate : positionUpdaters) {
+			if (propertyUpdate.Update()) {
+				vec3Updaters.push_back(propertyUpdate);
+			}
+		}
+		this->positionUpdaters = vec3Updaters;
+		glm::vec3 movement = translated - position;
+
+		if (vec3Updaters.size() == 0) {
+			translated = position;
+			return;
+		}
+		if (glm::dot(movement, movement) > 0.000001f) {
+			position += movement;
+		}
+	}
+};
 
 struct Camera {
+	std::vector<MeshVec3PropertyUpdate> vec3PropertyUpdates;
 	bool orbiting = false;
 	glm::vec3 orbitCentre;
 	float orbitRadius;
 	float orbitAngle;
 
+	// Target rotation and translation set by Vec3 Updaters each tick
+	glm::vec3 translated;
+	glm::vec3 rotated;
+
 	glm::vec3 position;
 	glm::vec3 rotation;
 	glm::mat3 rotationMatrix;
 	float focalLength;
+	bool lockLightToCamera = true;
+	bool lookAtLocked = false;
 
 	Camera(const glm::vec3 p, const glm::vec3 r, const float f) {
 		position = p;
 		rotation = r;
 		focalLength = f;
 		rotationMatrix = RotationMatrix(rotation.x, rotation.y, rotation.z);
+		translated = position;
+		rotated = rotation;
+	}
+
+	void Update(std::vector<Light>& lights) {
+		std::vector<MeshVec3PropertyUpdate> vec3Updaters;
+		for (MeshVec3PropertyUpdate& propertyUpdate : vec3PropertyUpdates) {
+			if (propertyUpdate.Update()) {
+				vec3Updaters.push_back(propertyUpdate);
+			}
+		}
+		this->vec3PropertyUpdates = vec3Updaters;
+
+		// --------------------------------------------------------------------------
+		// VERTEX UPDATES:
+
+		// Position = Previous Position, Translation = New Position after translation
+		glm::vec3 movement = translated - position;
+		if (glm::dot(movement, movement) > 0.000001f) {
+			position += movement;
+			if (lockLightToCamera) {
+				for (Light& light : lights) {
+					light.position += movement;
+					light.translated = position;
+				}
+			}
+		}
+
+		glm::vec3 rotationDiff = rotated - rotation;
+		if (glm::dot(rotationDiff, rotationDiff) > 0.000001f) {
+			AddRotation(rotationDiff.x, rotationDiff.y, rotationDiff.z);
+		}
+		if (lookAtLocked)
+			lookAt({0, 0, 0});
 	}
 
 	// X = Roll, Y = Yaw, Z = Pitch
@@ -972,11 +1130,13 @@ struct Camera {
 		rotation.y += y;
 		rotation.z += z;
 		rotationMatrix = RotationMatrix(rotation.x, rotation.y, rotation.z);
+		rotated = rotation;
 	}
 
 	void AddTranslation(float x, float y, float z) {
 		glm::vec3 delta = RotationMatrix(-rotation.x, -rotation.y, -rotation.z) * glm::vec3(x, y, z);
 		position += delta;
+		translated = position;
 	}
 
 	void lookAt(glm::vec3 p) {
@@ -986,6 +1146,7 @@ struct Camera {
 
 		this->rotation = { 0, yaw, pitch };
 		rotationMatrix = RotationMatrix(rotation.x, rotation.y, rotation.z);
+		this->rotated = rotation;
 	}
 
 	void startOrbit(glm::vec3 centre, float radius) {
@@ -1136,15 +1297,15 @@ bool TriangleHitLoc(const Mesh& mesh, const int& triangle, const Ray& r, glm::ve
 		   (fabs(alpha + beta + gamma - 1) <= 0.0001);
 }
 
-bool SlabTest(const Ray& r, const Mesh& mesh, const Triangle& t) {
-	double tx1 = (t.bbox.first.x - r.origin.x) / r.direction.x;
-	double tx2 = (t.bbox.second.x - r.origin.x) / r.direction.x;
+bool SlabTest(const Ray& r, const std::pair<glm::vec3, glm::vec3>& bbox) {
+	double tx1 = (bbox.first.x - r.origin.x) / r.direction.x;
+	double tx2 = (bbox.second.x - r.origin.x) / r.direction.x;
 
 	double tmin = fmin(tx1, tx2);
 	double tmax = fmax(tx1, tx2);
 
-	double ty1 = (t.bbox.first.y - r.origin.y) / r.direction.y;
-	double ty2 = (t.bbox.second.y - r.origin.y) / r.direction.y;
+	double ty1 = (bbox.first.y - r.origin.y) / r.direction.y;
+	double ty2 = (bbox.second.y - r.origin.y) / r.direction.y;
 
 	tmin = fmax(tmin, fmin(ty1, ty2));
 	tmax = fmin(tmax, fmax(ty1, ty2));
@@ -1154,7 +1315,7 @@ bool SlabTest(const Ray& r, const Mesh& mesh, const Triangle& t) {
 void Collision(const Ray& r, const std::vector<Mesh>& meshes, const size_t mesh_i, const size_t triangle_i, RayCollision& nearest) {
 	const Mesh& mesh = meshes[mesh_i];
 	const Triangle& t = mesh.triangles[triangle_i];
-	if (!SlabTest(r, mesh, t)) {
+	if (!SlabTest(r, t.bbox)) {
 		return;
 	}
 
@@ -1177,8 +1338,10 @@ bool NearestRayCollision(const Ray& r, const std::vector<Mesh>& meshes, RayColli
 	RayCollision nearest = { glm::vec3(), glm::vec3(), glm::vec3(), 0, 0, FLT_MAX };
 	for (size_t m = 0; m < meshes.size(); m++) {
 		const Mesh& mesh = meshes[m];
-		for (size_t i = 0; i < mesh.triangles.size(); i++) {
-			Collision(r, meshes, m, i, nearest);
+		if (SlabTest(r, mesh.bbox)) {
+			for (size_t i = 0; i < mesh.triangles.size(); i++) {
+				Collision(r, meshes, m, i, nearest);
+			}
 		}
 	}
 	if (nearest.distanceToCamera == FLT_MAX)
@@ -1187,28 +1350,13 @@ bool NearestRayCollision(const Ray& r, const std::vector<Mesh>& meshes, RayColli
 	return true; 
 }
 
-enum Shading {
-	PROXIMITY,
-	ANGLE_OF_INCIDENCE,
-	SPECULAR,
-	PROXY_AOI_AND_SPECULAR,
-	GOURAUD,
-	PHONG,
-	NONE
-};
-
-struct Light {
-	glm::vec3 position;
-	double radius;
-};
-
 double ProximityLighting(const std::vector<Light>& lights, const RayCollision& rc) {
 	// 1 / 4pir^2
 	double dist2 = -FLT_MAX;
 	for (const Light& light : lights) {
 		dist2 = fmax(dist2, glm::length2(rc.position - light.position));
 	}
-	return fmin(1 / (4 * M_PI * dist2) * 8, 1);
+	return fmin(200 * 1 / (4 * M_PI * dist2), 1);
 }
 
 double AngleOfIncidenceLighting(const std::vector<Light>& lights, const RayCollision& rc) {
@@ -1217,13 +1365,15 @@ double AngleOfIncidenceLighting(const std::vector<Light>& lights, const RayColli
 		glm::vec3 dir = glm::normalize(light.position - rc.position);
 		lighting = fmax(lighting, glm::dot(dir, rc.normal));
 	}
-	return lighting > 0 ? lighting/2 : 0;
+	// if (lighting > -0.5f && lighting < 0) lighting = 0.3f; 
+	return lighting > 0 ? lighting * 3.0 / 4.0 : 0;
 }
 
 // Returns the reflected vector given normalised incident and normal vectors
 glm::vec3 ReflectionVector(const glm::vec3& incident, const glm::vec3& normal) {
 	return incident - 2.0f * normal * (glm::dot(normal, incident));
 }
+
 
 double SpecularLighting(const std::vector<Light>& lights, const RayCollision& rc, const glm::vec3& cameraP) {
 	double lighting = -FLT_MAX;
@@ -1252,7 +1402,7 @@ double GouraudShading(const std::vector<Light>& lights, const RayCollision& rc, 
 	// Assume vertex order remains the same, (A, B, C)
 	return vertexLighting[0] * rc.barycentric[0] + vertexLighting[1] * rc.barycentric[1] + vertexLighting[2] * rc.barycentric[2];
 }
-double PhongShading(const std::vector<Light>& lights, const RayCollision& rc, const glm::vec3& cameraP, const Mesh& mesh, const int& triangle) {
+double PhongShading(const std::vector<Light>& lights, const RayCollision& rc, const glm::vec3& cameraP, const Mesh& mesh, const int& triangle, glm::vec3& outNormal) {
 	glm::vec3 interpolatedNormal(0, 0, 0);
 	for (size_t i = 0; i < 3; i++) {
 		glm::vec3 vertexNormal = mesh.GetVertexNormal(triangle, i);
@@ -1262,6 +1412,7 @@ double PhongShading(const std::vector<Light>& lights, const RayCollision& rc, co
 	RayCollision c;
 	c.normal = interpolatedNormal;
 	c.position = rc.position;
+	outNormal = interpolatedNormal;
 	const double dist2 = glm::length2(rc.position - lights[0].position);
 	return fmin(1, SpecularLighting(lights, c, cameraP) + AngleOfIncidenceLighting(lights, c) / (4 * M_PI * dist2) * 100);/// (4 * M_PI * dist2));
 }
@@ -1296,26 +1447,26 @@ double SchlickReflectance(const double cosTheta, const double refractiveIndex) {
 	return r0 + (1 - r0) * pow(1 - cosTheta, 5);
 }
 
-double ProcessShader(const Shading shader, const RayCollision& rc, const glm::vec3 camera, const std::vector<Light>& lights, const std::vector<Mesh>& meshes) {
+double ProcessShader(const Shading shader, const RayCollision& rc, const glm::vec3 camera, const std::vector<Light>& lights, const std::vector<Mesh>& meshes, glm::vec3& outNormal) {
 	switch (shader) {
-		case PROXIMITY: {
+		case Shading::PROXIMITY: {
 			return ProximityLighting(lights, rc);
 		}
-		case ANGLE_OF_INCIDENCE: {
+		case Shading::ANGLE_OF_INCIDENCE: {
 			return AngleOfIncidenceLighting(lights, rc);
 		}
-		case SPECULAR: {
+		case Shading::SPECULAR: {
 			return SpecularLighting(lights, rc, camera);
 		}
-		case PROXY_AOI_AND_SPECULAR: {
+		case Shading::PROXY_AOI_AND_SPECULAR: {
 			double dist2 = glm::length2(lights[0].position - rc.position);
-			return fmin(1, (SpecularLighting(lights, rc, camera) + AngleOfIncidenceLighting(lights, rc)) / (4 * M_PI * dist2) * 80);/// (4 * M_PI * dist2));
+			return fmin(1, (SpecularLighting(lights, rc, camera) + AngleOfIncidenceLighting(lights, rc)) / (4 * M_PI * dist2) * 100);/// (4 * M_PI * dist2));
 		}
-		case GOURAUD: {
+		case Shading::GOURAUD: {
 			return GouraudShading(lights, rc, camera, meshes[rc.mesh], rc.triangle);
 		}
-		case PHONG: {
-			return PhongShading(lights, rc, camera, meshes[rc.mesh], rc.triangle);
+		case Shading::PHONG: {
+			return PhongShading(lights, rc, camera, meshes[rc.mesh], rc.triangle, outNormal);
 		}
 		default: {
 			return 1;
@@ -1360,10 +1511,10 @@ std::pair<Colour, double> DielectricTransmission(
 	const std::pair<Colour, double> reflected = MirrorReflect(incoming, rc, camera, lights, meshes, depth, shadows, shader);
 	const std::pair<Colour, double> transmitted = RayCast(refractedRay, camera, lights, meshes, depth + 1, shadows, shader);
 	const Colour localColour = meshes[rc.mesh].colour;
-	const double localLighting = ProcessShader(shader, rc, camera.position, lights, meshes);
-
-	const Colour combinedColour = AddColours(ScaleColour(transmitted.first, transmissionScalar), AddColours(ScaleColour(localColour, localScalar), ScaleColour(reflected.first, reflectionScalar)));
-	const double combinedLighting = transmitted.second * transmissionScalar + localLighting * localScalar + reflected.second * reflectionScalar;
+	glm::vec3 outNorm;
+	const double localLighting = ProcessShader(shader, rc, camera.position, lights, meshes, outNorm) * (1 - transparancy);
+	const Colour combinedColour = AddColours(ScaleColour(transmitted.first, transmissionScalar), AddColours(ScaleColour(localColour, localScalar), ScaleColour(reflected.first, reflectionScalar * 0.5f)));
+	const double combinedLighting = (transmitted.second * transmissionScalar) + (localLighting * localScalar) + (reflected.second * reflectionScalar);
 	return std::make_pair(combinedColour, combinedLighting);
 }
 
@@ -1451,9 +1602,14 @@ std::pair<Colour, double> RayCast(const Ray& ray, const Camera& camera, const st
 			lighting = (ambient - 1) * occluded + 1;
 		}
 
+		glm::vec3 outNorm = {};
 		// Compute the shader lighting, multiply by direct point illumination shadows
-		lighting = ProcessShader(shader, c, camera.position, lights, meshes) * lighting;
+		lighting = ProcessShader(mesh.shadingType, c, camera.position, lights, meshes, outNorm) * lighting;
 
+		// If the normal at the collision is interpolated
+		if (glm::dot(outNorm, outNorm) > 0.00001f) {
+			c.normal = outNorm;
+		}
 		// If the material is refractive then compute the colour and lighting generated from the dielectric transmission 
 		if (mesh.refractiveIndex != 1 && depth < maxdepth) {
 			std::pair<Colour, double> refraction = DielectricTransmission(ray, c, camera, lights, meshes, depth, shadows, shader);
@@ -1473,7 +1629,61 @@ std::pair<Colour, double> RayCast(const Ray& ray, const Camera& camera, const st
 	return std::make_pair(colour, lighting);
 }
 
+void RayTracerParallel(DrawingWindow& window, const Camera& camera, const std::vector<Light>& lights, const std::vector<Mesh>& meshes, const ShadowType shadows, const Shading shader) {
+	std::mutex mutex;
+	std::condition_variable cvResult;
+	std::vector<std::future<std::vector<std::vector<uint32_t>>>> results;
+	const int threads = 20;
+	int jobSize = floor(HEIGHT / threads);
+
+	for (int t = 0; t < threads; t++) {
+		auto result = std::async(std::launch::async, 
+		[&camera, &lights, &meshes, &shadows, &shader, t, jobSize]() -> std::vector<std::vector<uint32_t>> {
+			std::vector<std::vector<uint32_t>> rows;
+			int yStart = jobSize * t;
+			int yEnd = (t != threads - 1) ? jobSize * (t + 1) : yStart + (HEIGHT - yStart);
+			
+			for (int v = yStart; v < yEnd; v++) {
+				rows.push_back({});
+				for (int u = 0; u < WIDTH; u++) {
+					const glm::vec3 rayV = CanvasPointToWorld(camera, u, v);
+					const Ray ray = { camera.position, rayV, false };
+					const std::pair<Colour, double> pixel = RayCast(ray, camera, lights, meshes, 0, shadows, shader);
+					const Colour colour = pixel.first;
+					const double lighting = pixel.second;
+					rows[rows.size() - 1].push_back(PackColour(colour.red * lighting, colour.green * lighting, colour.blue * lighting));
+				}
+			}
+			return rows;
+		});
+		{
+			std::lock_guard<std::mutex> lock(mutex);
+			results.push_back(std::move(result));
+		}
+	}
+
+	// Wait until the number of results == the Height of the image
+	{
+		std::unique_lock<std::mutex> lock(mutex);
+		cvResult.wait(lock, [&results] {
+			return results.size() == threads;
+		});
+	}
+
+	for (size_t t = 0; t < results.size(); t++) {
+		const std::vector<std::vector<uint32_t>>& rows = results[t].get();
+		const int yStart = jobSize * t;
+		const int yEnd = (t != threads - 1) ? jobSize * (t + 1) : yStart + (HEIGHT - yStart);
+		for (int v = yStart; v < yEnd; v++) {
+			for (int u = 0; u < WIDTH; u++) {
+				window.setPixelColour(u, v, rows[v - yStart][u]);
+			}
+		}
+	}
+}
+
 void Raytrace(DrawingWindow& window, const Camera& camera, const std::vector<Light>& lights, const std::vector<Mesh>& meshes, const ShadowType shadows=ShadowType::HARD_SHADOWS, const Shading shader=Shading::NONE) {
+	// Each thread gets assigned a row
 	for (int v = 0; v < HEIGHT; v++) {
 		for (int u = 0; u < WIDTH; u++) {
 			const glm::vec3 rayV = CanvasPointToWorld(camera, u, v);
@@ -1582,9 +1792,9 @@ void draw2D(DrawingWindow &window, std::vector<Shape2D> shapes, Drawing d) {
 	}
 }
 
-void AddMeshPropertyUpdaters(std::vector<Mesh>& meshes, int frame) {
+void AddMeshPropertyUpdaters(std::vector<Mesh>& meshes, std::vector<Light>& lights, int frame) {
 	for (Mesh& mesh : meshes) {
-		if (mesh.name == "tall_box" && frame == 0) {
+		if (mesh.name == "tall_box" && frame == 100) {
 			/*
 			MeshPropertyUpdate smoothnessUpdater(&(mesh.smoothness), 1, 120, true);
 			mesh.propertyUpdates.push_back(smoothnessUpdater);
@@ -1599,47 +1809,120 @@ void AddMeshPropertyUpdaters(std::vector<Mesh>& meshes, int frame) {
 			MeshVec3PropertyUpdate scalingUpdater(&(mesh.scaleTransition), glm::vec3(1, 1, 1), glm::vec3(0.2, 1, 0.2), 120, false);
 			mesh.vec3PropertyUpdates.push_back(scalingUpdater);
 			
-			MeshVec3PropertyUpdate positionUpdater(&(mesh.translation), glm::vec3(0, 0, 0), glm::vec3(0.8, 0, 0), 120, false);
+			MeshVec3PropertyUpdate positionUpdater(&(mesh.translation), glm::vec3(0, 0, 0), glm::vec3(0.7, 0, 0), 120, false);
 			mesh.vec3PropertyUpdates.push_back(positionUpdater);
 		} else if (mesh.name == "floor" && frame == 0) {
 			TextureMap brickWall = TextureMap("Textures/brickwall.ppm");
 			TextureMap brickWallNormal = TextureMap("Textures/brickwall_normal.ppm");
 			mesh.SetTextureMapper(brickWall, brickWallNormal);
 		}
-		else if (mesh.name == "short_box") {
-			if (frame == 0) {
-				MeshVec3PropertyUpdate positionUpdater(&(mesh.translation), glm::vec3(0, 0, 0), glm::vec3(0, 0.4, 0), 120, false);
-				mesh.vec3PropertyUpdates.push_back(positionUpdater);
-			}
-			else if (frame == 60) {
-				mesh.refractiveIndex = 2.0f;
+		else if (mesh.name == "Sphere") {
+			if (frame == 100) {
+				mesh.refractiveIndex = 1.05f;
 				MeshPropertyUpdate transparencyUpdater(&(mesh.transparancy), 0, 1, 60, false);
 				mesh.propertyUpdates.push_back(transparencyUpdater);
 			}
-			else if (frame == 100) {
-				MeshPropertyUpdate transparencyUpdater(&(mesh.transparancy), 1, 0, 60, false);
-				mesh.propertyUpdates.push_back(transparencyUpdater);
-			}
-			else if (frame == 130) {
-				mesh.refractiveIndex = 1;
+		}
+		else if (mesh.name == "left_wall") {
+			if (frame == 0) {
+				mesh.smoothness = 1;
 			}
 		}
-
+	}
+	
+	
+	if (frame == 150) {
+		MeshVec3PropertyUpdate positionUpdater(&(lights[0].translated), lights[0].position, glm::vec3(lights[0].position.x, -1.0, lights[0].position.z), 60, false);
+		lights[0].positionUpdaters.push_back(positionUpdater);
+	}
+	else if (frame == 180) {
+		MeshVec3PropertyUpdate positionUpdater(&(lights[0].translated), lights[0].position, glm::vec3(lights[0].position.x, 0.3, lights[0].position.z), 60, false);
+		lights[0].positionUpdaters.push_back(positionUpdater);
+	}
+	else if (frame == 210) {
+		MeshVec3PropertyUpdate positionUpdater(&(lights[0].translated), lights[0].position, glm::vec3(1, -0.4, 3), 60, false);
+		lights[0].positionUpdaters.push_back(positionUpdater);
+	}
+	else if (frame == 270) {
+		MeshPropertyUpdate radiusUpdater(&(lights[0].radius), 0.02f, 120, false);
+		lights[0].propertyUpdaters.push_back(radiusUpdater);
 	}
 }
+
+void AddCameraPropertyUpdaters(Camera& camera, int frame) {
+
+	/*
+	if (frame == 0) {
+		MeshVec3PropertyUpdate positionUpdater(&(camera.translated), glm::vec3(0, 0, 2.5), glm::vec3(5, 0, 2.5), 120, false);
+		camera.vec3PropertyUpdates.push_back(positionUpdater);
+	}
+	else if (frame == 70) {
+		MeshVec3PropertyUpdate positionUpdater(&(camera.translated), camera.position, glm::vec3(10, 0, 2.5), 120, false);
+		camera.vec3PropertyUpdates.push_back(positionUpdater);
+	}
+	else if (frame == 140) {
+		// Rotate 140 degrees
+		MeshVec3PropertyUpdate rotationUpdater(&(camera.rotated), camera.rotation, glm::vec3(0, 135 * M_PI / 180.0f, 0), 120, false);
+		camera.vec3PropertyUpdates.push_back(rotationUpdater);
+	}
+	*/
+
+	if (frame == 0) { // Need to remove the first 30 frames
+		MeshVec3PropertyUpdate rotationUpdater(&(camera.rotated), camera.rotation, glm::vec3(0, 60 * M_PI / 180.0f, 0), 120, false);
+		camera.vec3PropertyUpdates.push_back(rotationUpdater);
+	}
+	else if (frame == 60) {
+		MeshVec3PropertyUpdate bezierPositionUpdater(&(camera.translated), camera.position, glm::vec3(0, 0, 7), glm::vec3(0, 0, 2.5), 120, false);
+		camera.vec3PropertyUpdates.push_back(bezierPositionUpdater);
+		camera.lookAtLocked = true;
+	}
+	else if (frame == 130) {
+		MeshVec3PropertyUpdate positionUpdater(&(camera.translated), camera.position, glm::vec3(0, 0.5, 2.5), 120, false);
+		camera.vec3PropertyUpdates.push_back(positionUpdater);
+		camera.lookAtLocked = true;
+	}
+	else if (frame == 210) {
+		MeshVec3PropertyUpdate rotationUpdater(&(camera.rotated), camera.rotation, glm::vec3(30 * M_PI / 180.0f, 90 * M_PI / 180.0f, 0), 120, false);
+		camera.vec3PropertyUpdates.push_back(rotationUpdater);
+		camera.lookAtLocked = false;
+
+		MeshVec3PropertyUpdate positionUpdater(&(camera.translated), camera.position, glm::vec3(1, 0, 2.5), 120, false);
+		camera.vec3PropertyUpdates.push_back(positionUpdater);
+	}
+
+	/*
+	if (frame == 0) {
+		MeshVec3PropertyUpdate positionUpdater(&(camera.translated), camera.position, glm::vec3(0, 0, 3.5), 120, false);
+		camera.vec3PropertyUpdates.push_back(positionUpdater);
+		camera.lookAtLocked = false;
+	}
+	if (frame == 60) {
+		MeshVec3PropertyUpdate positionUpdater(&(camera.translated), camera.position, glm::vec3(0, 0.5, 3.5), 120, false);
+		camera.vec3PropertyUpdates.push_back(positionUpdater);
+		camera.lookAtLocked = true;
+	}
+	*/
+}
+
+enum Scene {
+	THREE_SPHERES,
+	CORNELL_BOX
+};
 
 void run(Drawing draw) {
 	DrawingWindow window = DrawingWindow(WIDTH, HEIGHT, false);
 	SDL_Event event;
 	std::vector<Shape2D> shapes;
 	Camera *camera = nullptr;
-	std::vector<Mesh> meshes;
-	std::vector<Light> lights = {{{ 0, 0.4f, 2 }, 0.3f }};
+	std::vector<Mesh> meshes = {};
+	std::vector<Light> lights =  {{{ 0.2f, 0.6f, 2.5f }, 0.001f }}; // {{{ 0.2f, 0.8f, 2.0f }, 0.3f}}; //
 	bool FPS_OUTPUT = false;
-	bool RECORDING = false;
+	bool RECORDING = true;
 	bool DYNAMIC_MESH = true;
 	int frame = 0;
+	int MAX_FRAMES = 310;
 	std::string directory;
+	Scene scene = CORNELL_BOX;
 
 	if (RECORDING) {
 		unsigned int ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch()).count();
@@ -1653,16 +1936,62 @@ void run(Drawing draw) {
 	}
 
 	if (draw == POINT_CLOUD || draw == WIRE_FRAME || draw == RASTERISED_3D || draw == RAYTRACE) {
-		OBJFile objs("cornell-box.obj", "objs/", 0.35); // 0.35
-		meshes = objs.GetMeshes();
-		camera = new Camera(glm::vec3(0.0, 0.0, 3.0), glm::vec3(0.0, 0.0, 0.0), 2.0);
+		double meshScalar = 0.35;
+		if (scene == THREE_SPHERES) {
+			camera = new Camera(glm::vec3(0.0f, 0.0f, 2.5), glm::vec3(0.0, 0.0, 0.0), 2.0);
+			OBJFile objs("highpoly_sphere.obj", "objs/", meshScalar); // 0.35
+			meshes = { objs.GetMeshes()[0], objs.GetMeshes()[0], objs.GetMeshes()[0] }; // Copied three times for different shaders
+			meshes[0].Translate({0, 0, -1});
+			meshes[1].Translate({5, 0, -1}); meshes[1].shadingType = Shading::GOURAUD;
+			meshes[2].Translate({10, 0, -1}); meshes[2].shadingType = Shading::PHONG;
+			camera->lockLightToCamera = true;
+		}
+		else if (scene == CORNELL_BOX) {
+			camera = new Camera(glm::vec3(-12.0f, 0.0f, 7.0f), glm::vec3(0.0, -M_PI / 2, 0.0), 2.0);
+			OBJFile objs("cornell-box.obj", "objs/", meshScalar); // 0.35
+			OBJFile sphere("highpoly_sphere.obj", "objs/", 0.15);
+			OBJFile fence("fence_lowpoly.obj", "objs/", 0.25);
+			OBJFile bunny("stanford_bunny.obj", "objs/", 4);
+			for (Mesh& m : objs.GetMeshes()) {
+				if (m.name != "short_box") {
+					meshes.push_back(m);
+					if (m.name == "floor") {
+						meshes.push_back(m);
+						meshes[meshes.size() - 1].name = "floor2";
+						meshes[meshes.size() - 1].Translate({2.5, 0, 2.5});
+						meshes[meshes.size() - 1].Scale({1.2, 0, 1.2});
+					}
+				}
+			}
+
+			// Sphere
+			meshes.push_back(sphere.GetMeshes()[0]);
+			meshes[meshes.size() - 1].Translate({0.5, -0.4, 0.4});
+			meshes[meshes.size() - 1].shadingType = Shading::PHONG;
+
+			// Fences
+			meshes.push_back(fence.GetMeshes()[0]);
+			meshes[meshes.size() - 1].Translate({1.6, -1.1, 2.35});
+			Mesh fenceCopy = meshes[meshes.size() - 1];
+			meshes.push_back(fenceCopy);
+			meshes[meshes.size() - 1].Translate({0, 0, 1});
+
+			// Bunny
+			meshes.push_back(bunny.GetMeshes()[0]);
+			meshes[meshes.size() - 1].Translate({2.5, -1.1, 2.5});
+			meshes[meshes.size() - 1].Rotate({0, -M_PI / 2, 0});
+			camera->lockLightToCamera = false;
+		}
 	}
 
 	if (DYNAMIC_MESH) {
-		AddMeshPropertyUpdaters(meshes, frame);
+		AddMeshPropertyUpdaters(meshes, lights, frame);
+		AddCameraPropertyUpdaters(*camera, frame);
 	}
 
-	while (true) {
+	Shading shading = Shading::PROXY_AOI_AND_SPECULAR;
+	ShadowType shadows = ShadowType::HARD_SHADOWS;
+	while (frame < MAX_FRAMES) {
 		const uint64_t start = SDL_GetPerformanceCounter();
 		if (window.pollForInputEvents(event)) handleEvent(event, window, shapes, draw, camera, lights);
 		window.clearPixels();
@@ -1671,7 +2000,7 @@ void run(Drawing draw) {
 				DrawRasterized3D(window, *camera, meshes);
 				break;
 			case RAYTRACE:
-				Raytrace(window, *camera, lights, meshes, ShadowType::HARD_SHADOWS, PROXY_AOI_AND_SPECULAR);
+				RayTracerParallel(window, *camera, lights, meshes, shadows, shading);
 				break;
 			case POINT_CLOUD:
 				shapes = std::vector<Shape2D> { Pointcloud(meshes, *camera) };
@@ -1685,23 +2014,44 @@ void run(Drawing draw) {
 				draw2D(window, shapes, draw);
 		}
 		window.renderFrame();
+
+		// Camera Update Handlers
+		if (frame == 60){
+			int x = 9;
+		}
+		if (DYNAMIC_MESH) {
+			camera->Update(lights);
+		}
 		if (camera && camera->orbiting) {
 			camera->orbitStep();
 		}
 		
 		frame++;
+		//if (frame == 215)
+		// 	shadows = ShadowType::SOFT_SHADOWS;
+		if (frame == 270)
+			shadows = ShadowType::SOFT_SHADOWS;
+		std::cout << frame << std::endl;
+		// Mesh Update Handlers
 		if (DYNAMIC_MESH) {
-			for (Mesh& m : meshes) m.UpdateMesh();
-			AddMeshPropertyUpdaters(meshes, frame);
+			for (Mesh& m : meshes)  { m.UpdateMesh(); }
+			for (Light& l : lights) l.Update();
+			AddMeshPropertyUpdaters(meshes, lights, frame);
+			AddCameraPropertyUpdaters(*camera, frame);
 		}
+
+		// Output Frame to file
 		if (RECORDING) {
 			std::string filename = std::to_string(frame) + ".bmp";
 			window.saveBMP(directory + filename);
 		}
 
+		// Lock FPS to 60
 		uint64_t end = SDL_GetPerformanceCounter();
 		float elapsed = (end - start) / (float)SDL_GetPerformanceFrequency() * 1000.0f;
 		SDL_Delay(int(fmax((1.0f / FPS_CAP) * 1000.0f - elapsed, 0)));
+
+		// Print FPS
 		if (FPS_OUTPUT) {
 			end = SDL_GetPerformanceCounter();
 			elapsed = (end - start) / (float)SDL_GetPerformanceFrequency() * 1000.0f;

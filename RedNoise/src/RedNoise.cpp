@@ -412,7 +412,7 @@ void WitchSymbol(DrawingWindow &window) {
 	DrawShape2D(window, CreateLine2D(CanvasPoint(midX, 0), CanvasPoint(midX, HEIGHT), white));
 	DrawShape2D(window, CreateLine2D(CanvasPoint(midX - WIDTH / 6, midY), CanvasPoint(midX + WIDTH / 6, midY), white));
 }
-
+I’ve found that using the API gives you a lot more control and therefore less nonsense, but I’m also not trying to be an edgelord with it, so I’m not pushing it to go to weird places so YMMV.
 void TestTextureMapping(DrawingWindow &window, TextureMap texture) {
 	CanvasTriangle textureTriangle = CanvasTriangle(CanvasPoint(195, 10), CanvasPoint(395, 380), CanvasPoint(65, 330));
 	CanvasTriangle triangle = CanvasTriangle(CanvasPoint(160, 10), CanvasPoint(300, 230), CanvasPoint(10, 150));

@@ -4,18 +4,27 @@
 #include <fstream>
 #include <vector>
 
-#define WIDTH 320
-#define HEIGHT 240
+#define WIDTH 10000
+#define HEIGHT 10000
 
 void draw(DrawingWindow &window) {
 	window.clearPixels();
-	for (size_t y = 0; y < window.height; y++) {
-		for (size_t x = 0; x < window.width; x++) {
-			float red = rand() % 256;
+	for (size_t y = 0; y < window.height / 20; y++) {
+		for (size_t x = 0; x < window.width / 20; x++) {
+			float red = 0.0;
 			float green = 0.0;
 			float blue = 0.0;
+			double brightness =  fmax(0.5, sin((rand() % 1000000000) / 1000000000.0));
+			red = 255 * brightness;
+			green = 255 * brightness;
+			blue = 255 * brightness;
+			
 			uint32_t colour = (255 << 24) + (int(red) << 16) + (int(green) << 8) + int(blue);
-			window.setPixelColour(x, y, colour);
+			for (int i = 0; i < 20; i++) {
+				for (int f = 0; f < 20; f++) {
+					window.setPixelColour(x * 20 + i, y * 20 + f, colour);
+				}
+			}
 		}
 	}
 }
