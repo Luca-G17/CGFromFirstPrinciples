@@ -35,6 +35,7 @@ add_executable(RedNoise
         libs/sdw/TextureMap.cpp
         libs/sdw/TexturePoint.cpp
         libs/sdw/Utils.cpp
+        src/UtilityFunctions.cpp
         src/RedNoise.cpp)
 
 if (MSVC)
