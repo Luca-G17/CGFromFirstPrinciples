@@ -1,0 +1,1 @@
+CMakeLists.txt not found in C:\Users\lucag\OneDrive\Documents\UNI\Year3\ComputerGraphics\CGRepo\Week2\RedNoise Select CMakeLists.txt

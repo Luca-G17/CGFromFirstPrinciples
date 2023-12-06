@@ -1340,8 +1340,8 @@ void run(Drawing draw) {
 	Camera *camera = nullptr;
 	std::vector<Mesh> meshes = {};
 	std::vector<Light> lights =  {{{ 0.2f, 0.6f, 2.5f }, 0.001f }}; // {{{ 0.2f, 0.8f, 2.0f }, 0.3f}}; //
-	bool FPS_OUTPUT = false;
-	bool RECORDING = true;
+	bool FPS_OUTPUT = true;
+	bool RECORDING = false;
 	bool DYNAMIC_MESH = true;
 	int frame = 0;
 	int MAX_FRAMES = 310;
@@ -1481,7 +1481,6 @@ void run(Drawing draw) {
 			elapsed = (end - start) / (float)SDL_GetPerformanceFrequency() * 1000.0f;
 			std::cout << "FPS=" <<  1.0f / (elapsed / 1000.0f) << std::endl;
 		}
-
 	}
 	delete camera;
 }
