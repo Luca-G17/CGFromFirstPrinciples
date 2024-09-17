@@ -1,6 +1,7 @@
-# CGRepo
+# Computer Graphics from First Principles
+This repository documents my c++ computer graphics from first principles adventure
 
-## Lab Week:
+## Week:
 - [Week 1 - Red Noise](#week-1)
 - [Week 2 - Interpolation](#week-2)
 - [Week 3 - Basic Geometry](#week-3)
