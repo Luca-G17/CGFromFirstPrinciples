@@ -8,6 +8,7 @@ This repository documents my c++ computer graphics from first principles adventu
 - [Week 4 - 3D Rendering](#week-4)
 - [Week 5 - Camera Position/Orientation](#week-5)
 - [Week 6 - Raytracing](#week-6)
+- [Final Project](#final-project)
 
 ## Week 1 ##
 Red Noise:  
@@ -290,3 +291,16 @@ bool InShadow(const glm::vec3& p, const glm::vec3& norm, const std::vector<Model
 	return true;
 }
 ```
+## Final Project ##
+### Features ###
+- [Specular](https://en.wikipedia.org/wiki/Specular_highlight) + [AOI](https://en.wikipedia.org/wiki/Angle_of_incidence_(optics)) + Proximity Lighting
+- [Gouraud](https://en.wikipedia.org/wiki/Gouraud_shading) + [Phong Shading](https://en.wikipedia.org/wiki/Phong_shading)
+- [Shlick Reflectance](https://en.wikipedia.org/wiki/Schlick%27s_approximation)
+- [Dielectric Transmission](https://en.wikipedia.org/wiki/Dielectric_Shader)
+- Soft Shadows
+- [Normal Mapping Textures](https://en.wikipedia.org/wiki/Normal_mapping)
+- Parallelized Ray Tracer
+
+https://github.com/user-attachments/assets/52e87e26-ce96-4f09-9a7e-e80a63dd49e2
+
+
