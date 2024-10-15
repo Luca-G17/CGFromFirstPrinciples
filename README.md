@@ -301,6 +301,6 @@ bool InShadow(const glm::vec3& p, const glm::vec3& norm, const std::vector<Model
 - [Normal Mapping Textures](https://en.wikipedia.org/wiki/Normal_mapping)
 - Parallelized Ray Tracer
 
-https://github.com/user-attachments/assets/52e87e26-ce96-4f09-9a7e-e80a63dd49e2
+https://github.com/user-attachments/assets/94d80a0b-d7e5-41d4-81ec-38468fa06462
 
 
